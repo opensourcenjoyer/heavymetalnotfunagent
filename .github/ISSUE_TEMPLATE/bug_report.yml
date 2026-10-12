@@ -1,0 +1,56 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security issue?** (key leak, swap-review bypass, prompt injection that moves funds) Don't file it here. Use [private vulnerability reporting](https://github.com/opensourcenjoyer/heavymetalnotfunagent/security/advisories/new) instead.
+
+        **Never paste** API keys, RPC URLs containing keys, `wallet.json`, or `config.toml` contents.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. heavymetal --devnet
+        2. >> ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output / traceback
+      description: Redact keys, RPC URLs and wallet addresses you don't want public.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`pip show heavymetalagent` or commit hash"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Interface
+      options: ["REPL (default)", "TUI (--tui)", "Web (--web)", "Headless (-p)"]
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Agent / review models
+      placeholder: deepseek/deepseek-v4-flash, typesafe/jev-1.13
+  - type: input
+    id: env
+    attributes:
+      label: OS, Python version, cluster
+      placeholder: Ubuntu 24.04, Python 3.12.7, mainnet

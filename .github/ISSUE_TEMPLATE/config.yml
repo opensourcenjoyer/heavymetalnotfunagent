@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/opensourcenjoyer/heavymetalnotfunagent/security/advisories/new
+    about: Key leaks, swap-review bypasses, prompt injection that moves funds. Please report privately.

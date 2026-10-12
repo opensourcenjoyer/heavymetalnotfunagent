@@ -1,0 +1,80 @@
+[project]
+name = "heavymetalagent"
+version = "0.0.1"
+description = "Lightweight open-source AI agent for Solana memecoins"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Ossein", email = "opensourcenjoyer@users.noreply.github.com" },
+    { name = "Aksultan", email = "aksultanakn@users.noreply.github.com" },
+]
+keywords = ["solana", "ai-agent", "llm", "memecoin", "trading", "jupiter", "pump.fun", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.60,<3",
+    "anthropic>=0.40,<1",
+    "solders>=0.23,<1",
+    "httpx>=0.27,<1",
+    "base58>=2.1,<3",
+    "websockets>=13,<16",
+    "prompt-toolkit>=3.0.40,<4",
+    "rich>=13,<15",
+    "tomli-w>=1.0,<2",
+    "textual>=1.0.0,<9",
+    "textual-serve>=1.1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.8"]
+
+[project.urls]
+Homepage = "https://github.com/opensourcenjoyer/heavymetalnotfunagent"
+Repository = "https://github.com/opensourcenjoyer/heavymetalnotfunagent"
+Issues = "https://github.com/opensourcenjoyer/heavymetalnotfunagent/issues"
+Changelog = "https://github.com/opensourcenjoyer/heavymetalnotfunagent/blob/main/CHANGELOG.md"
+
+[project.scripts]
+heavymetal = "heavymetal.main:run"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["heavymetal"]
+
+[tool.hatch.build.targets.sdist]
+include = ["heavymetal", "tests", "scripts", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "A", "BLE", "RUF"]
+ignore = [
+    "E501",    # long lines are handled by the formatter where possible
+    "RUF001",  # ambiguous unicode: intentional (homoglyph tables, UI glyphs)
+    "RUF002",
+    "RUF003",
+    "RUF005",  # `a + [b]` concatenation is fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "RUF012"]
