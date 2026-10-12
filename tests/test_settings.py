@@ -12,8 +12,8 @@ def test_models_list_contains_latest():
     assert "claude-sonnet-5-5" in AVAILABLE_MODELS
     assert "claude-opus-5-5" in AVAILABLE_MODELS
     assert "claude-fable-5-1" in AVAILABLE_MODELS
-    assert "claude-haiku-5-5" in AVAILABLE_MODELS
-    assert "claude-3-5-sonnet-latest" in AVAILABLE_MODELS
+    assert "claude-haiku-4-5" in AVAILABLE_MODELS
+    assert "claude-sonnet-5-5" in AVAILABLE_MODELS
     assert "deepseek/deepseek-v4-flash" in AVAILABLE_MODELS
 
 
@@ -51,3 +51,19 @@ async def test_handle_settings_commands(tmp_path, monkeypatch):
 
     # 5. Show settings
     await handle_settings_command(env, ["show"])
+
+
+def test_anthropic_env_only_selects_claude(monkeypatch, tmp_path):
+    from heavymetal import config as config_mod
+    from heavymetal.env import make_agent_llm
+    from heavymetal.providers.anthropic_provider import AnthropicProvider
+
+    monkeypatch.setenv("HEAVYMETAL_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    cfg = config_mod.load()
+    assert cfg.llm.agent_model == config_mod.ANTHROPIC_DEFAULT_MODEL
+    assert isinstance(make_agent_llm(cfg, cfg.llm.agent_model), AnthropicProvider)
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")  # both keys: keep the configured default
+    assert config_mod.load().llm.agent_model == "deepseek/deepseek-v4-flash"

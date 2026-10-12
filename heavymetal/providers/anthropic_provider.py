@@ -25,7 +25,7 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (3.0, 15.0),
     "claude-opus-5-5": (15.0, 75.0),
     "claude-fable-5-1": (3.0, 15.0),
-    "claude-haiku-5-5": (0.80, 4.0),
+    "claude-haiku-4-5": (1.0, 5.0),
     "claude-3-7-sonnet": (3.0, 15.0),
     "claude-3-5-sonnet": (3.0, 15.0),
     "claude-3-5-haiku": (0.80, 4.0),
@@ -125,7 +125,7 @@ def estimate_cost(model_name: str, in_tokens: int, out_tokens: int) -> float:
 class AnthropicProvider:
     is_openrouter: bool = False
 
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-latest", base_url: str | None = None):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-5-5", base_url: str | None = None):
         self.model = model
         self.api_key = api_key
         self.is_openrouter = False

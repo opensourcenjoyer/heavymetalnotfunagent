@@ -14,6 +14,7 @@ from heavymetal import paths
 
 MAINNET_PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
 DEVNET_RPC = "https://api.devnet.solana.com"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
 
 
 @dataclass
@@ -65,6 +66,37 @@ class TradeConfig:
 class KeysConfig:
     jupiter: str = ""
     pinata_jwt: str = ""
+    dune: str = ""  # Dune Analytics API key: full-population smallcap volume for Trenches
+    dune_query_id: str = ""  # your saved copy of the Trenches SQL (/trenches sql)
+    birdeye: str = ""  # Birdeye API key: unique wallets per token (farm filter)
+    helius: str = ""  # Helius API key: parsed swaps per wallet (fee-farm detection)
+
+
+@dataclass
+class SignalsConfig:
+    scanner: bool = True  # background scanner while the REPL is open (mainnet only)
+    scan_interval_s: int = 60  # GeckoTerminal new_pools poll
+    mark_interval_s: int = 300  # refresh price/FDV of tracked signals
+    pulse_interval_s: int = 900  # refresh the Trenches sweep + bank the day
+    min_volume_h24: float = 25_000  # a launch must trade this much in 24h to become a signal
+    min_liquidity_usd: float = 5_000  # ... and hold at least this much liquidity
+    milestone_min_liq: float = 25_000  # milestones (2x..100x) only count at this liquidity or more
+    track_days: int = 14  # signals stop being marked after this many days
+    alerts: list[str] = field(default_factory=lambda: ["HIGH_CONVICTION", "SPECULATIVE"])  # verdicts to alert on
+    # farm gates (Fair-style): see heavymetal/signals/farm.py
+    wash_turnover: float = 300.0  # 24h volume / liquidity above this = bot churning an empty book
+    loop_turnover: float = 100.0  # flat-price loops: turnover above this with a flat price and 50/50 flow
+    feefarm_swaps_per_wallet: float = 15.0  # swaps a wallet a day through a near-zero-fee pool
+    roundtrip_swaps_per_wallet: float = 100.0  # swaps a wallet a day anywhere = round-tripping
+    min_crowd_wallets: int = 25  # fewer wallets than this carrying min_crowd_volume = not a crowd
+    min_crowd_volume: float = 50_000
+    zero_reserve_usd_per_wallet: float = 10_000  # unreadable liquidity carrying more than this per wallet
+    smallcap_fdv_cap: float = 200_000_000
+    deny_mints: list[str] = field(default_factory=list)  # excluded by hand (known bot loops, relaunches)
+    # fear & greed fixed normals (override after re-measuring; see heavymetal/trenches/fear_greed.py)
+    fg_volume_normal: float = 0.0  # 0 = built-in default
+    fg_hold_normal: float = 0.0
+    fg_ceiling_normal: float = 0.0
 
 
 @dataclass
@@ -74,6 +106,7 @@ class Config:
     solana: SolanaConfig = field(default_factory=SolanaConfig)
     trade: TradeConfig = field(default_factory=TradeConfig)
     keys: KeysConfig = field(default_factory=KeysConfig)
+    signals: SignalsConfig = field(default_factory=SignalsConfig)
 
     def node_name(self, url: str | None = None) -> str | None:
         url = url or self.solana.rpc_url
@@ -134,7 +167,7 @@ def load() -> Config:
     p = paths.config_path()
     if p.exists():
         data = tomllib.loads(p.read_text())
-        for section in ("llm", "review", "solana", "trade", "keys"):
+        for section in ("llm", "review", "solana", "trade", "keys", "signals"):
             _merge(getattr(cfg, section), data.get(section, {}))
     env = os.environ
     cfg.llm.api_key = env.get("OPENROUTER_API_KEY", cfg.llm.api_key)
@@ -142,6 +175,18 @@ def load() -> Config:
     cfg.solana.rpc_url = env.get("HM_RPC_URL", cfg.solana.rpc_url)
     cfg.keys.jupiter = env.get("JUPITER_API_KEY", cfg.keys.jupiter)
     cfg.keys.pinata_jwt = env.get("PINATA_JWT", cfg.keys.pinata_jwt)
+    cfg.keys.dune = env.get("DUNE_API_KEY", cfg.keys.dune)
+    cfg.keys.dune_query_id = env.get("HM_DUNE_QUERY_ID", cfg.keys.dune_query_id)
+    cfg.keys.birdeye = env.get("BIRDEYE_API_KEY", cfg.keys.birdeye)
+    cfg.keys.helius = env.get("HELIUS_API_KEY", cfg.keys.helius)
+    # Anthropic-only setup: an OpenRouter model id can't be served, so default to Claude.
+    if (
+        cfg.llm.anthropic_key
+        and not cfg.llm.api_key
+        and cfg.llm.provider in ("auto", "anthropic")
+        and not cfg.llm.agent_model.startswith("claude-")
+    ):
+        cfg.llm.agent_model = ANTHROPIC_DEFAULT_MODEL
     return normalize(cfg)
 
 
@@ -159,7 +204,7 @@ def wizard(cfg: Config) -> Config:
         if key.startswith("sk-ant-"):
             cfg.llm.anthropic_key = key
             cfg.llm.provider = "anthropic"
-            cfg.llm.agent_model = "claude-3-5-sonnet-latest"
+            cfg.llm.agent_model = ANTHROPIC_DEFAULT_MODEL
         else:
             cfg.llm.api_key = key
     rpc = input(f"Solana mainnet RPC URL, e.g. QuickNode [{cfg.solana.rpc_url}]: ").strip()

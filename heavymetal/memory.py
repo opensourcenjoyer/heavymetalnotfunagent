@@ -37,6 +37,31 @@ CREATE TABLE IF NOT EXISTS positions (
   exit_signature TEXT, pnl_pct REAL, notes TEXT);
 CREATE INDEX IF NOT EXISTS ix_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS ix_positions_mint ON positions(mint);
+CREATE TABLE IF NOT EXISTS signals (
+  id INTEGER PRIMARY KEY, ts REAL, mint TEXT UNIQUE, symbol TEXT, name TEXT, pool TEXT, dex TEXT,
+  source TEXT, verdict TEXT, reasons TEXT, fdv0 REAL, liq0 REAL, price0 REAL, features TEXT,
+  model TEXT, score REAL, verdict_now TEXT, status TEXT DEFAULT 'tracking',
+  last_ts REAL, last_fdv REAL, last_liq REAL, last_price REAL, chg_h1 REAL, chg_h24 REAL,
+  peak_fdv REAL, peak_ts REAL, ended_at REAL);
+CREATE INDEX IF NOT EXISTS ix_signals_ts ON signals(ts);
+CREATE INDEX IF NOT EXISTS ix_signals_status ON signals(status);
+CREATE TABLE IF NOT EXISTS signal_marks (
+  id INTEGER PRIMARY KEY, signal_id INTEGER, ts REAL, fdv REAL, liq REAL, price REAL, vol_h24 REAL,
+  source TEXT);
+CREATE INDEX IF NOT EXISTS ix_marks_signal ON signal_marks(signal_id, ts);
+CREATE TABLE IF NOT EXISTS milestones (
+  id INTEGER PRIMARY KEY, signal_id INTEGER, level INTEGER, ts REAL, fdv REAL, first_observed INTEGER,
+  UNIQUE(signal_id, level));
+CREATE TABLE IF NOT EXISTS trench_days (
+  day TEXT PRIMARY KEY, source TEXT, smallcap_vol REAL, trench_vol REAL, total_vol REAL, top5_share REAL,
+  pools INTEGER, drops TEXT, top TEXT, pace REAL, chain_total REAL, version INTEGER, updated_at REAL);
+CREATE TABLE IF NOT EXISTS launches (
+  pool TEXT PRIMARY KEY, mint TEXT, symbol TEXT, created_ts REAL, first_seen REAL, d1_close REAL,
+  top_price REAL, top_ts REAL, last_price REAL, last_ts REAL, vol_h24 REAL, liq REAL, source TEXT);
+CREATE INDEX IF NOT EXISTS ix_launches_created ON launches(created_ts);
+CREATE TABLE IF NOT EXISTS fg_days (
+  day TEXT PRIMARY KEY, idx REAL, volume REAL, momentum REAL, hold REAL, ceiling REAL, cohort INTEGER,
+  hold_depth REAL, ceiling_depth REAL, updated_at REAL);
 """
 
 

@@ -142,9 +142,20 @@ class ChatDecider:
         return DecideResult(answers, errors, self.model, cost, tin, tout, round(time.monotonic() - t0, 2))
 
 
+ANTHROPIC_REVIEW_FALLBACK = "claude-haiku-4-5"
+
+
 def make_decider(cfg, http: httpx.AsyncClient):
     model = cfg.llm.review_model
     api = cfg.llm.review_api
+    # Anthropic-only setup: the default reviewer (Jev via OpenRouter) is unreachable without an
+    # OpenRouter key, which would block every swap. Review with a Claude model instead.
+    if not model.startswith("claude-") and not cfg.llm.api_key and cfg.llm.anthropic_key:
+        model = ANTHROPIC_REVIEW_FALLBACK
+    if model.startswith("claude-"):
+        from heavymetal.providers.anthropic_provider import AnthropicProvider
+
+        return ChatDecider(AnthropicProvider(cfg.llm.anthropic_key or cfg.llm.api_key, model))
     if api == "decisions" or (api == "auto" and model.startswith("typesafe/jev-1")):
         return DecisionsDecider(http, cfg.llm.api_key, model, cfg.llm.base_url, cfg.llm.zdr, cfg.review.threshold)
     return ChatDecider(OpenAICompatProvider(cfg.llm.api_key, model, cfg.llm.base_url, cfg.llm.zdr))

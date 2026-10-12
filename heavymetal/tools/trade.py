@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from heavymetal.solana.constants import SOL_MINT, explorer_tx, is_valid_pubkey
+from heavymetal.solana.constants import SOL_MINT, USDC_MINT, explorer_tx, is_valid_pubkey
 from heavymetal.solana.tx import send_and_confirm, sign_external
 from heavymetal.tools.registry import err, ok, tool
 from heavymetal.tools.wallet import to_raw
@@ -10,6 +10,53 @@ from heavymetal.tools.wallet import to_raw
 
 def norm_mint(m: str) -> str:
     return SOL_MINT if m.strip().upper() in ("SOL", "WSOL") else m.strip()
+
+
+def succeeded(res: dict) -> bool:
+    """Tool results report success as 'success' (most tools) or 'confirmed' (signed transactions)."""
+    return isinstance(res, dict) and res.get("status") in ("success", "confirmed")
+
+
+async def sol_price_usd(env) -> float:
+    """Live SOL/USD price: Jupiter price API, falling back to the deepest SOL-quoted Dexscreener pool."""
+    try:
+        p = (await env.jup.prices([SOL_MINT])).get(SOL_MINT)
+        if p:
+            return float(p)
+    except Exception:  # noqa: BLE001 - fall through to Dexscreener
+        pass
+    pairs = await env.dex.token_pairs(USDC_MINT)
+    rates = [x["sol_usd"] for x in pairs if x.get("sol_usd")]
+    if not rates:
+        raise RuntimeError("could not fetch the SOL/USD price")
+    return float(rates[0])
+
+
+# tool -> the argument that holds the SOL amount of a buy
+SOL_AMOUNT_ARG = {"swap": "amount", "pump_trade": "amount", "buy_with_tpsl": "sol_amount"}
+USD_DESC = "spend this many US dollars worth of SOL instead (e.g. 5 for '$5'); converted at the live SOL price in code"
+
+
+async def usd_to_sol(env, name: str, args: dict) -> tuple[dict, dict]:
+    """If a buy was sized in USD (`amount_usd`), convert it to SOL in code before review and signing.
+
+    Returns (args with the SOL amount filled in, meta for the reviewer). Raises ValueError on bad input.
+    """
+    if name not in SOL_AMOUNT_ARG or args.get("amount_usd") is None:
+        return args, {}
+    args = dict(args)
+    usd = float(args.pop("amount_usd"))
+    if usd <= 0:
+        raise ValueError("amount_usd must be > 0")
+    if name == "swap" and norm_mint(args.get("input_mint", "")) != SOL_MINT:
+        raise ValueError("amount_usd only works for buys paid in SOL (input_mint='SOL')")
+    if name == "pump_trade":
+        if args.get("action") != "buy":
+            raise ValueError("amount_usd only works for buys")
+        args["denominated_in_sol"] = True
+    price = await sol_price_usd(env)
+    args[SOL_AMOUNT_ARG[name]] = round(usd / price, 6)
+    return args, {"requested_usd": usd, "sol_usd": round(price, 4)}
 
 
 async def decimals_of(env, mint: str) -> int:
@@ -70,21 +117,35 @@ async def quote(env, input_mint: str, output_mint: str, amount: float):
     "swap",
     "Swap tokens via Jupiter (best price across routers, managed landing). Buy a memecoin with "
     "input_mint='SOL'; sell with output_mint='SOL'. Falls back to PumpPortal for pump.fun/bonk tokens. "
+    "Give either amount (input token units, e.g. SOL) or, for SOL buys sized in dollars, amount_usd. "
     "Irreversible; reviewed before signing.",
     {
         "input_mint": {"type": "string"},
         "output_mint": {"type": "string"},
-        "amount": {"type": "number", "description": "input amount in UI units"},
+        "amount": {"type": "number", "description": "input amount in UI units (SOL for buys)"},
+        "amount_usd": {"type": "number", "description": USD_DESC},
         "slippage_bps": {"type": "integer", "description": "optional; default lets Jupiter optimise"},
     },
-    ["input_mint", "output_mint", "amount"],
+    ["input_mint", "output_mint"],
     irreversible=True,
     mainnet_only=True,
 )
-async def swap(env, input_mint: str, output_mint: str, amount: float, slippage_bps: int | None = None):
+async def swap(
+    env,
+    input_mint: str,
+    output_mint: str,
+    amount: float | None = None,
+    slippage_bps: int | None = None,
+    amount_usd: float | None = None,
+):
+    if amount_usd is not None:  # normally converted by the registry before review; direct calls land here
+        args, _ = await usd_to_sol(env, "swap", {"input_mint": input_mint, "amount_usd": amount_usd})
+        amount = args["amount"]
     i, o = norm_mint(input_mint), norm_mint(output_mint)
     if not (is_valid_pubkey(i) and is_valid_pubkey(o)) or i == o:
         return err("invalid mints")
+    if amount is None:
+        return err("give amount (or amount_usd for SOL buys)")
     if amount <= 0:
         return err("amount must be > 0")
     d = describe_trade("swap", {"input_mint": i, "output_mint": o, "amount": amount})
@@ -126,6 +187,7 @@ async def _pump(env, action, mint, amount, in_sol, pool, slippage_pct) -> dict:
         "action": {"type": "string", "enum": ["buy", "sell"]},
         "mint": {"type": "string"},
         "amount": {"type": ["number", "string"], "description": "SOL (buy) or tokens / '50%' (sell)"},
+        "amount_usd": {"type": "number", "description": "buys only: " + USD_DESC},
         "denominated_in_sol": {"type": "boolean", "description": "true if amount is SOL (default: true for buy)"},
         "pool": {
             "type": "string",
@@ -134,7 +196,7 @@ async def _pump(env, action, mint, amount, in_sol, pool, slippage_pct) -> dict:
         },
         "slippage_pct": {"type": "number"},
     },
-    ["action", "mint", "amount"],
+    ["action", "mint"],
     irreversible=True,
     mainnet_only=True,
 )
@@ -142,13 +204,19 @@ async def pump_trade(
     env,
     action: str,
     mint: str,
-    amount,
+    amount=None,
     denominated_in_sol: bool | None = None,
     pool: str = "auto",
     slippage_pct: float | None = None,
+    amount_usd: float | None = None,
 ):
     if action not in ("buy", "sell") or not is_valid_pubkey(mint):
         return err("action must be buy|sell and mint must be a valid address")
+    if amount_usd is not None:
+        args, _ = await usd_to_sol(env, "pump_trade", {"action": action, "amount_usd": amount_usd})
+        amount, denominated_in_sol = args["amount"], True
+    if amount is None:
+        return err("give amount (or amount_usd for buys)")
     in_sol = (action == "buy") if denominated_in_sol is None else denominated_in_sol
     if isinstance(amount, str) and amount.endswith("%"):
         in_sol = False
@@ -164,21 +232,33 @@ async def pump_trade(
 @tool(
     "buy_with_tpsl",
     "Buy a memecoin token with SOL and automatically set up Take-Profit (TP multiple) "
-    "and Stop-Loss (SL %) tracking in the local position manager.",
+    "and Stop-Loss (SL %) tracking in the local position manager. Size it with sol_amount or amount_usd.",
     {
         "mint": {"type": "string", "description": "token mint address"},
         "sol_amount": {"type": "number", "description": "amount of SOL to spend"},
+        "amount_usd": {"type": "number", "description": USD_DESC},
         "tp_multiple": {"type": "number", "default": 2.0, "description": "take-profit multiple (e.g. 2.0 for 2x)"},
         "sl_pct": {"type": "number", "default": 30.0, "description": "stop-loss percentage (e.g. 30.0 for -30%)"},
         "slippage_bps": {"type": "integer", "description": "optional slippage tolerance in basis points"},
     },
-    ["mint", "sol_amount"],
+    ["mint"],
     irreversible=True,
     mainnet_only=True,
 )
 async def buy_with_tpsl(
-    env, mint: str, sol_amount: float, tp_multiple: float = 2.0, sl_pct: float = 30.0, slippage_bps: int | None = None
+    env,
+    mint: str,
+    sol_amount: float | None = None,
+    tp_multiple: float = 2.0,
+    sl_pct: float = 30.0,
+    slippage_bps: int | None = None,
+    amount_usd: float | None = None,
 ):
+    if amount_usd is not None:
+        args, _ = await usd_to_sol(env, "buy_with_tpsl", {"amount_usd": amount_usd})
+        sol_amount = args["sol_amount"]
+    if sol_amount is None:
+        return err("give sol_amount (or amount_usd)")
     from heavymetal.solana.positions import track_new_position
     from heavymetal.solana.resolver import resolve_target
 
@@ -191,7 +271,7 @@ async def buy_with_tpsl(
         symbol = "TOKEN"
 
     swap_res = await swap(env, "SOL", target_mint, sol_amount, slippage_bps)
-    if swap_res.get("status") != "success":
+    if not succeeded(swap_res):
         return swap_res
 
     # Record position
@@ -236,8 +316,11 @@ async def close_position(env, mint: str, reason: str = "MANUAL"):
 
     pos = open_pos[0]
     # Sell 100% via pump_trade or swap
-    sell_res = await pump_trade(env, "sell", target_mint, "100%", denominated_in_sol=False)
-    if sell_res.get("status") != "success":
+    try:
+        sell_res = await pump_trade(env, "sell", target_mint, "100%", denominated_in_sol=False)
+    except Exception as e:  # noqa: BLE001 - not a PumpPortal token: fall back to Jupiter
+        sell_res = err(f"pumpportal: {e}")
+    if not succeeded(sell_res):
         # Fall back to swap
         from heavymetal.tools.wallet import holdings
 
@@ -246,7 +329,7 @@ async def close_position(env, mint: str, reason: str = "MANUAL"):
         if token_bal <= 0:
             return err("zero token balance found to sell")
         sell_res = await swap(env, target_mint, "SOL", token_bal)
-        if sell_res.get("status") != "success":
+        if not succeeded(sell_res):
             return sell_res
 
     # Record close in DB

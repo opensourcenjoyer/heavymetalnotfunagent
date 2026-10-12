@@ -62,3 +62,29 @@ def test_make_decider_auto():
     assert isinstance(make_decider(cfg, httpx.AsyncClient()), DecisionsDecider)
     cfg.llm.review_model = "deepseek/deepseek-v4-flash"
     assert isinstance(make_decider(cfg, httpx.AsyncClient()), ChatDecider)
+
+
+def test_make_decider_anthropic_routing():
+    import httpx
+
+    from heavymetal.config import Config
+    from heavymetal.decide import ChatDecider, DecisionsDecider, make_decider
+    from heavymetal.providers.anthropic_provider import AnthropicProvider
+
+    http = httpx.AsyncClient()
+    # Anthropic-only: default Jev reviewer is unreachable -> Claude fallback, not REVIEW_UNAVAILABLE
+    cfg = Config()
+    cfg.llm.anthropic_key = "sk-ant-test"
+    d = make_decider(cfg, http)
+    assert isinstance(d, ChatDecider) and isinstance(d.provider, AnthropicProvider)
+    assert d.model == "claude-haiku-4-5"
+
+    # explicit claude-* review model goes to Anthropic even when an OpenRouter key exists
+    cfg.llm.api_key = "sk-or-test"
+    cfg.llm.review_model = "claude-sonnet-5-5"
+    d = make_decider(cfg, http)
+    assert isinstance(d.provider, AnthropicProvider) and d.model == "claude-sonnet-5-5"
+
+    # OpenRouter key present: default Jev decisions reviewer is unchanged
+    cfg.llm.review_model = "typesafe/jev-1.13"
+    assert isinstance(make_decider(cfg, http), DecisionsDecider)

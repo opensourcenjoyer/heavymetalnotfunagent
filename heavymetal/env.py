@@ -9,6 +9,11 @@ import httpx
 from solders.keypair import Keypair
 
 from heavymetal.config import Config
+from heavymetal.data.birdeye import Birdeye
+from heavymetal.data.defillama import DefiLlama
+from heavymetal.data.dune import Dune
+from heavymetal.data.geckoterminal import GeckoTerminal
+from heavymetal.data.helius import Helius
 from heavymetal.decide import make_decider
 from heavymetal.memory import DB
 from heavymetal.providers import AnthropicProvider, OpenAICompatProvider
@@ -33,6 +38,12 @@ class AgentEnv:
     rug: RugCheck
     jup: Jupiter
     pump: PumpPortal
+    gecko: GeckoTerminal | None = None
+    llama: DefiLlama | None = None
+    dune: Dune | None = None
+    birdeye: Birdeye | None = None
+    helius: Helius | None = None
+    scanner: Any = None  # heavymetal.signals.scanner.Scanner while running
     messages: list[dict] = field(default_factory=list)  # live conversation (for the reviewer)
     research: dict[str, set[str]] = field(default_factory=dict)  # mint -> research tools run this session
     on_event: object = None  # callable(kind, payload) for the UI
@@ -82,6 +93,11 @@ def build_env(cfg: Config, kp: Keypair, db: DB, session_id: str) -> AgentEnv:
         rug=RugCheck(http),
         jup=Jupiter(http, cfg.keys.jupiter),
         pump=PumpPortal(http),
+        gecko=GeckoTerminal(http),
+        llama=DefiLlama(http),
+        dune=Dune(http, lambda: cfg.keys.dune),
+        birdeye=Birdeye(http, lambda: cfg.keys.birdeye),
+        helius=Helius(http, lambda: cfg.keys.helius),
     )
     env.rpc.on_failover = lambda old, new, why: env.emit(
         "rpc_failover", {"from": cfg.node_name(old) or "node", "to": cfg.node_name(new) or "node", "reason": why}

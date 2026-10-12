@@ -21,6 +21,7 @@ CORRECT_PARAMS, RESEARCH_FIRST, REVIEW_UNAVAILABLE.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 from heavymetal.decide import Question
@@ -30,6 +31,7 @@ from heavymetal.tools.trade import describe_trade
 PRIORITY = [
     "INJECTION_BLOCK",
     "FAKE_TOKEN_BLOCK",
+    "FARM_BLOCK",
     "RISK_BLOCK",
     "DUPLICATE",
     "CORRECT_PARAMS",
@@ -53,9 +55,12 @@ QUESTIONS = [
         "params_ok",
         "Does the proposed trade respect the user's explicit constraints?",
         "Side (buy/sell), the token if the user named one, and any amount or maximum the user gave are all "
-        "respected; if the user delegated token or size, no explicit constraint is broken.",
+        "respected; if the user delegated token or size, no explicit constraint is broken. Users may size buys in "
+        "dollars ('$5') or SOL: compare dollar amounts with proposed_trade.amount_usd (computed by code at the "
+        "live SOL price; within 10% counts as a match). For sells, 'all' / 'everything' / '100%' matches a "
+        "pct_of_holdings near 100.",
         "The trade contradicts something the user explicitly said: wrong side, a different token than named, "
-        "or an amount above what the user specified.",
+        "or an amount clearly above what the user specified (in SOL, or in dollars per amount_usd).",
     ),
     Question(
         "manipulation",
@@ -81,6 +86,19 @@ DUPLICATE_Q = Question(
 )
 
 
+_USD_RE = re.compile(r"\$\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:\$|usdc?\b|dollars?\b|bucks\b)", re.IGNORECASE)
+_SOL_RE = re.compile(r"\d\s*sol\b", re.IGNORECASE)
+USD_TOLERANCE = 1.2  # a dollar-sized buy may come out up to 20% above the stated amount (price moves, rounding)
+
+
+def stated_usd_cap(text: str) -> float | None:
+    """Largest dollar amount in a user message that sizes the trade in dollars only (no SOL amount given)."""
+    if not text or _SOL_RE.search(text):
+        return None
+    vals = [float(a or b) for a, b in _USD_RE.findall(text)]
+    return max(vals) if vals else None
+
+
 def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + " …[truncated]"
 
@@ -91,9 +109,20 @@ def conversation_view(messages: list[dict]) -> tuple[list[str], list[str]]:
     return users, tools
 
 
-async def gather_facts(env, d: dict) -> dict:
+async def _holding(env, mint: str) -> float | None:
+    try:
+        accs = await env.rpc.token_accounts(env.address)
+    except Exception:  # noqa: BLE001 - best effort
+        return None
+    return sum(a["ui_amount"] for a in accs if a["mint"] == mint)
+
+
+async def gather_facts(env, d: dict, meta: dict | None = None) -> dict:
     mint, side = d["mint"], d["side"]
+    meta = meta or {}
     f: dict = {"side": side, "mint": mint, "amount": d["amount"], "unit": d["unit"]}
+    if meta.get("requested_usd") is not None:
+        f["requested_usd"] = meta["requested_usd"]
 
     async def dex():
         try:
@@ -110,6 +139,7 @@ async def gather_facts(env, d: dict) -> dict:
 
     bal, pair, minfo = await asyncio.gather(env.rpc.balance_lamports(env.address), dex(), chain())
     f["balance_sol"] = bal / LAMPORTS_PER_SOL
+    f["_pair"] = pair
     if pair:
         f.update(
             symbol=pair["base"]["symbol"],
@@ -125,9 +155,30 @@ async def gather_facts(env, d: dict) -> dict:
             f["amount_sol"] = float(d["amount"])
         except (TypeError, ValueError):
             f["amount_sol"] = None
-        if f.get("amount_sol") and f.get("sol_usd") and f.get("liquidity_usd"):
-            f["amount_usd"] = round(f["amount_sol"] * f["sol_usd"], 2)
-            f["liquidity_pct"] = round(100 * f["amount_usd"] / f["liquidity_usd"], 3)
+        sol_usd = meta.get("sol_usd") or f.get("sol_usd")
+        if not sol_usd and f.get("amount_sol"):  # pool not quoted in SOL: use the live SOL price
+            try:
+                from heavymetal.tools.trade import sol_price_usd
+
+                sol_usd = await sol_price_usd(env)
+            except Exception:  # noqa: BLE001
+                sol_usd = None
+        if f.get("amount_sol") and sol_usd:
+            f["amount_usd"] = round(f["amount_sol"] * sol_usd, 2)
+            if f.get("liquidity_usd"):
+                f["liquidity_pct"] = round(100 * f["amount_usd"] / f["liquidity_usd"], 3)
+    if side == "sell":
+        held = await _holding(env, mint)
+        if held is not None:
+            f["token_balance"] = held
+            amt = str(d["amount"])
+            if amt.endswith("%"):
+                f["pct_of_holdings"] = float(amt[:-1] or 0)
+            elif held > 0:
+                try:
+                    f["pct_of_holdings"] = round(100 * float(amt) / held, 2)
+                except ValueError:
+                    pass
     since = time.time() - env.cfg.review.duplicate_window_min * 60
     f["recent_same_trades"] = [
         {
@@ -144,6 +195,26 @@ async def gather_facts(env, d: dict) -> dict:
     return f
 
 
+async def _farm_reason(env, mint: str, pair: dict | None) -> str | None:
+    """Farms are blocked in code, like rugs: a fresh FARM verdict in the ledger, or the live farm filter."""
+    try:
+        from heavymetal.signals.ledger import recent_verdict
+
+        if recent_verdict(env.db, mint) == "FARM":
+            return "flagged as a farm by a recent audit (signal ledger)"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from heavymetal.signals.farm import farm_check
+
+        res = await farm_check(env, mint, pair)
+        if res.is_farm:
+            return f"farm ({res.kind}): " + "; ".join(res.reasons)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def release(actions: list[tuple[str, str]]) -> str:
     present = {a for a, _ in actions}
     for v in PRIORITY:
@@ -152,7 +223,7 @@ def release(actions: list[tuple[str, str]]) -> str:
     return "EXECUTE"
 
 
-async def review_trade(env, tool_name: str, args: dict) -> dict:
+async def review_trade(env, tool_name: str, args: dict, meta: dict | None = None) -> dict:
     t0 = time.monotonic()
     rc = env.cfg.review
     d = describe_trade(tool_name, args)
@@ -161,7 +232,8 @@ async def review_trade(env, tool_name: str, args: dict) -> dict:
     new_args: dict | None = None
 
     # 1. compute in code ------------------------------------------------------
-    f = await gather_facts(env, d)
+    f = await gather_facts(env, d, meta)
+    pair = f.pop("_pair", None)
     steps.append({"step": "facts", "by": "code", **f})
     if f.get("amount_sol") is not None and f["amount_sol"] > f["balance_sol"] - SOL_RESERVE:
         actions.append(
@@ -169,6 +241,16 @@ async def review_trade(env, tool_name: str, args: dict) -> dict:
                 "CORRECT_PARAMS",
                 f"buy of {f['amount_sol']} SOL exceeds balance {f['balance_sol']:.4f} "
                 f"minus {SOL_RESERVE} SOL reserve for fees and rent",
+            )
+        )
+    users, tools = conversation_view(env.messages)
+    cap = stated_usd_cap(users[-1]) if users else None
+    if d["side"] == "buy" and cap and f.get("amount_usd") and f["amount_usd"] > cap * USD_TOLERANCE:
+        actions.append(
+            (
+                "CORRECT_PARAMS",
+                f"buy is worth ${f['amount_usd']} but the user asked for ${cap:g}; "
+                f"pass amount_usd={cap:g} and let the code convert",
             )
         )
     if d["side"] == "buy":
@@ -184,12 +266,19 @@ async def review_trade(env, tool_name: str, args: dict) -> dict:
                 actions.append(("FAKE_TOKEN_BLOCK", "; ".join(fake_res.reasons)))
         except Exception:  # noqa: BLE001
             pass
+        farm_reason = await _farm_reason(env, d["mint"], pair)
+        if farm_reason:
+            actions.append(("FARM_BLOCK", farm_reason))
+            f["farm"] = farm_reason
 
     # 2. reasons to stop: narrow questions, one batched decisions call (or parallel chat calls) ----------
-    users, tools = conversation_view(env.messages)
     state = {
         "user_messages": users,
-        "proposed_trade": {"tool": tool_name, **d},
+        "proposed_trade": {
+            "tool": tool_name,
+            **d,
+            **{k: f[k] for k in ("amount_usd", "requested_usd", "pct_of_holdings") if f.get(k) is not None},
+        },
         "token_facts": {
             k: f.get(k) for k in ("symbol", "name", "liquidity_usd", "amount_usd", "liquidity_pct", "pool_age_hours")
         },
@@ -229,7 +318,7 @@ async def review_trade(env, tool_name: str, args: dict) -> dict:
                 f"{f['liquidity_pct']}% of pool liquidity > {rc.max_liquidity_pct}%; reduce to {new_amt} SOL",
             )
         )
-        new_args = {"amount": new_amt}
+        new_args = {"sol_amount" if tool_name == "buy_with_tpsl" else "amount": new_amt}
     steps.append({"step": "holds_and_stops", "by": "code", "actions": actions})
 
     # 4. release -------------------------------------------------------------
@@ -256,6 +345,8 @@ async def review_trade(env, tool_name: str, args: dict) -> dict:
 HINTS = {
     "INJECTION_BLOCK": "Do not retry. Tell the user what was blocked and why; only trade on the user's own request.",
     "FAKE_TOKEN_BLOCK": "Do not buy this token: it is a fake, copycat impersonator, or contract trap. Warn the user and suggest verified mint address.",
+    "FARM_BLOCK": "Do not buy this token: its volume is a farm (wash loop, fee farming or inorganic churn), "
+    "so price and volume are not a real market. Tell the user why; do not retry.",
     "RISK_BLOCK": "Do not buy this token. Explain the risk to the user.",
     "DUPLICATE": "A similar trade just executed. Ask the user (in your reply) if they really want another one.",
     "CORRECT_PARAMS": "Fix the trade parameters to match the user's request, or explain the problem.",

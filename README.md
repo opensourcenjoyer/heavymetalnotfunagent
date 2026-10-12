@@ -38,6 +38,7 @@ First run asks for an LLM key and RPC URL, creates the agent wallet at `~/.heavy
 ```
 >> https://dexscreener.com/solana/4k3Dyj...
 >> buy 0.05 SOL of <mint> with 2x TP, 30% SL
+>> buy $5 of <mint>                 # dollar amounts are converted to SOL in code
 >> what's trending? rug-check the top 3 and tell me which looks safest
 >> scan wallet <address>
 >> send 0.05 SOL to <address>
@@ -52,8 +53,8 @@ Commands: `/help` `/wallet` `/positions` (active TP/SL targets) `/history` (trad
 
 | Role | Default | Providers Supported |
 |---|---|---|
-| Agent loop (tool calling) | `deepseek/deepseek-v4-flash` | **Anthropic** native (any `claude-*` model, e.g. `claude-sonnet-5-5`, `claude-haiku-5-5`) + **OpenAI-compatible** (OpenRouter, Ollama, vLLM) |
-| Swap reviewer | `typesafe/jev-1.13` | decisions model (Jev 1.x) or any chat model (Claude, DeepSeek, etc.) |
+| Agent loop (tool calling) | `deepseek/deepseek-v4-flash` | **Anthropic** native (any `claude-*` model, e.g. `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-4-5`) + **OpenAI-compatible** (OpenRouter, Ollama, vLLM) |
+| Swap reviewer | `typesafe/jev-1.13` (`claude-haiku-4-5` if you only have an Anthropic key) | decisions model (Jev 1.x) or any chat model (Claude, DeepSeek, etc.) |
 
 - **Anthropic Native Support**: set `ANTHROPIC_API_KEY` (or `anthropic_key` in config). Use any Claude model: `/model agent claude-sonnet-5-5`.
 - **OpenAI-Compatible / OpenRouter**: set `OPENROUTER_API_KEY` (or `api_key` in config). Any endpoint works via `llm.base_url`.
@@ -67,7 +68,7 @@ Every `swap`, `pump_trade`, `buy_with_tpsl` and `close_position` is reviewed bef
 1. **Compute in code:** balance and fee reserve, size vs pool liquidity, freeze/mint authority, recent same-token trades in the ledger, research done this session.
 2. **Reasons to stop:** narrow questions, one batched call to Jev: `user_requested`, `params_ok`, `manipulation` (instructions aimed at an AI inside tool results), `intended_repeat`. The reviewer sees user messages and tool results separately; only the user can authorize.
 3. **Holds:** code rules: research first, reduce size on thin liquidity.
-4. **Release:** fixed priority → one verdict: `EXECUTE`, `REDUCE_SIZE` (runs smaller), or blocked: `INJECTION_BLOCK`, `RISK_BLOCK`, `DUPLICATE`, `CORRECT_PARAMS`, `RESEARCH_FIRST`, `REVIEW_UNAVAILABLE` (fails closed).
+4. **Release:** fixed priority → one verdict: `EXECUTE`, `REDUCE_SIZE` (runs smaller), or blocked: `INJECTION_BLOCK`, `FAKE_TOKEN_BLOCK`, `FARM_BLOCK` (farms are blocked in code, like rugs), `RISK_BLOCK`, `DUPLICATE`, `CORRECT_PARAMS`, `RESEARCH_FIRST`, `REVIEW_UNAVAILABLE` (fails closed).
 
 Blocked verdicts go back to the agent with a hint (do the research, fix the params, or explain to the user). Every question, probability and verdict is stored; `/reviews <id>` prints the decision path. Sends, launches and fee claims get the code checks only (`review.actions` controls which tools are model-reviewed).
 
@@ -90,6 +91,41 @@ Small and hand-made (the question wording was tuned on it), so read it as a smok
 | Scan | `scan_wallet` | RPC parsed transactions |
 | Launch | `launch_token` (bonk keyless / pump needs Pinata JWT), `claim_creator_fees` | PumpPortal + IPFS |
 | Memory | `remember`, `recall`, `trade_history` | SQLite (FTS5) |
+| Signals | `signal_runners`, `signal_performance`, `signal_backtest`, `farm_scan`, `scanner_status` | signal ledger (SQLite), GeckoTerminal, Dexscreener, PumpPortal |
+| Market | `trenches_pulse` (smallcap volume + Trench Fear & Greed) | GeckoTerminal, DefiLlama, Dune (optional) |
+| Wiki | `wiki_search`, `wiki_read`, `wiki_note` | bundled markdown + `~/.heavymetal/wiki` |
+| Keys | `connector_status` | Birdeye, Helius, Dune (optional keys) |
+
+## Signals, farms, Trenches, wiki
+
+**Farms get flagged like rugs.** `token_audit` runs Fair-style farm gates on every token: wash (24h volume > 300x liquidity),
+zero-reserve pools, round-tripping (100+ swaps/wallet), fee/points farming (15+ swaps/wallet on a near-zero-fee pool),
+thin crowds (< 25 wallets carrying $50K+) and flat loops. A hit is `HARD PASS / FARM`, and the swap review blocks the buy in
+code (`FARM_BLOCK`). Thresholds live in `[signals]`; Birdeye / Helius keys sharpen wallet counts.
+
+**Signal ledger.** Every audit (yours, the agent's, or the background scanner's) becomes a signal once: verdict, FDV,
+liquidity and a frozen feature snapshot. Marks follow it for 14 days; milestones 2x–100x are logged once and never deleted
+(>= $25K liquidity). `/signals perf` shows per-verdict hit rates within 24h / 72h / 7d counting only matured signals, with n
+and *thin* flags; `/signals backtest` compares the audit rules, a logistic model and the base rate walk-forward, with
+lookahead-leak guards. `/signals backfill` fills outcomes from GeckoTerminal hourly candles.
+
+**Background scanner** (REPL, mainnet, on by default, `/scanner off`): PumpPortal launches + migrations and GeckoTerminal new
+pools. A launch becomes a signal at $25K 24h volume and $5K liquidity. It audits in code (no LLM), alerts above the prompt
+and never trades.
+
+**Trenches** (`/trenches`): Solana smallcap volume (<= $200M FDV; majors, stables, tokenized stocks and farm pools dropped and
+disclosed), top-5 tickers, pace, regime vs its own 90d/180d/1y history, launch hold/ceiling ladders from the day-1 close,
+and the **Trench Fear & Greed** index (volume 1/3 and 3 more arms against fixed normals; momentum 1/3). Sources are tagged:
+`dune` (full population, your saved query: `/trenches sql`), `gt` (GeckoTerminal top-200 sweep), `est` (DefiLlama × measured
+share). Methodology adapted from [Fair's Trenches Pulse](https://fairfund.vc/trenches/).
+
+**Wiki** (`/wiki`): pages on launchpads (pump.fun, PumpSwap, bonk.fun, Meteora, Moonshot), farm patterns, rug archetypes and
+past rugs. `token_audit` returns matching `wiki_refs`; dead or rugged signals get an auto post-mortem in
+`~/.heavymetal/wiki/cases/`. Case pages carry a `verify:` note: check figures against primary sources.
+
+**Keys** (`/keys`): `/keys set dune | dune_query_id | birdeye | helius` (hidden input, stored in config.toml). The agent asks you
+to run it when a feature needs a key; it never asks for keys in chat. Env: `DUNE_API_KEY`, `HM_DUNE_QUERY_ID`,
+`BIRDEYE_API_KEY`, `HELIUS_API_KEY`.
 
 All transactions are signed locally; the key never leaves the machine and is never sent to a model. External text is marked untrusted in every tool result.
 
@@ -102,9 +138,12 @@ All transactions are signed locally; the key never leaves the machine and is nev
         |
  Tool registry ── irreversible swap? ──> Swap review (code facts + Jev decisions) ──> verdict
         |
- Adapters: RPC/tx · Jupiter · PumpPortal · Dexscreener · RugCheck · IPFS
+ Adapters: RPC/tx · Jupiter · PumpPortal · Dexscreener · RugCheck · IPFS · GeckoTerminal · DefiLlama · Dune · Birdeye · Helius
+        |                                       ^
+        |               Background scanner (code-only audits, marks, Trenches refresh)
         |
  SQLite ~/.heavymetal: sessions + full messages · trades ledger · reviews · usage · knowledge
+                       · signals + marks + milestones · trench days · launches · fear & greed days
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and sequence diagrams.
@@ -112,6 +151,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and sequence diag
 ```
 heavymetal/
   app.py agent.py review.py decide.py env.py memory.py config.py settings.py ui.py main.py
+  commands_signals.py ui_signals.py   # /trenches /signals /scanner /wiki /keys + rich renderers, toolbar
+  data/                           # geckoterminal, defillama, dune (+ Trenches SQL), birdeye, helius, connectors
+  signals/                        # farm filter, code-only audit, ledger, performance, backtest, scanner
+  trenches/                       # gates, pulse (sweep/bank/backfill), launches (ladders), fear_greed
+  kb/wiki.py  wiki/               # wiki index/search + bundled pages (launchpads, farms, rugs, methodology)
   providers/                      # anthropic_provider.py (native Claude), openai_compat.py (OpenRouter/Ollama/vLLM, ZDR)
   solana/                         # rpc, nodes, tx (sign/partial-sign/land), jupiter, pumpportal, dexscreener,
                                   # rugcheck, ipfs, resolver, fake_check, positions
@@ -149,6 +193,23 @@ cluster = "mainnet"
 [trade]
 slippage_pct = 10.0
 priority_fee_sol = 0.0001
+
+[keys]                   # optional data connectors (/keys set <name>)
+dune = ""
+dune_query_id = ""
+birdeye = ""
+helius = ""
+
+[signals]
+scanner = true           # background scanner in the REPL (mainnet)
+min_volume_h24 = 25000   # launch -> signal gates
+min_liquidity_usd = 5000
+milestone_min_liq = 25000
+wash_turnover = 300.0    # farm gates
+feefarm_swaps_per_wallet = 15.0
+roundtrip_swaps_per_wallet = 100.0
+deny_mints = []          # excluded by hand
+fg_volume_normal = 0.0   # 0 = built-in; /trenches calibrate [save]
 ```
 
 Use a dedicated RPC: the public mainnet endpoint rate-limits calls like `getTokenLargestAccounts`.
@@ -205,6 +266,7 @@ Transfers (`send_sol`, `send_token` with recipient token-account creation) were 
 - **The private key is on disk** at `~/.heavymetal/wallet.json`. Anyone with that file controls the funds. Back it up.
 - **TP/SL targets are not executed automatically.** They are tracked and flagged in `/positions`; a sell happens only when you or the agent close the position.
 - **Fund it with small amounts only.** The wallet balance is your only spending limit.
+- **Signals and Fear & Greed are analysis, not advice.** Multiples are valuation comparisons, not returns; small samples are marked thin. The default Fear & Greed normals are an initial calibration; re-measure them on your own ledger.
 - Memecoins are extremely high risk; most go to zero. Not financial advice.
 
 ## Roadmap
@@ -212,6 +274,8 @@ Transfers (`send_sol`, `send_token` with recipient token-account creation) were 
 - Social analysis: token socials, Telegram groups, website checks, pluggable X/Twitter backend
 - Model review for sends/launches (config already supports it), more eval cases
 - Automatic TP/SL execution (targets are tracked and flagged today; closing is agent- or user-initiated)
+- Signals and Trenches in the Textual TUI (they are REPL-only today); EVM chains for Trenches
+- Done: farm filter, signal ledger + performance + backtests, background scanner, Trenches + Fear & Greed, agent wiki
 - Done in 0.0.1: Textual TUI, browser UI, position tracking with PnL
 
 ## Contributing

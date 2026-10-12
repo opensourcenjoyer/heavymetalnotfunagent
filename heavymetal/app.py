@@ -9,11 +9,25 @@ import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
+from rich.markup import escape
 from rich.text import Text
 
 from heavymetal import config as config_mod
 from heavymetal import paths
 from heavymetal.agent import run_turn
+from heavymetal.commands_signals import (
+    SIGNALS_HELP,
+    TRENCHES_HELP,
+    AlertSink,
+    fg_cmd,
+    keys_cmd,
+    scanner_cmd,
+    signals_cmd,
+    start_scanner,
+    trenches_cmd,
+    wiki_cmd,
+)
 from heavymetal.env import AgentEnv, build_env
 from heavymetal.memory import DB
 from heavymetal.solana import nodes, wallet
@@ -50,19 +64,44 @@ COMMANDS = [
     "/rpc add",
     "/rpc rm",
     "/rpc fallback",
+    "/trenches",
+    "/trenches refresh",
+    "/trenches sql",
+    "/trenches calibrate",
+    "/fg",
+    "/signals",
+    "/signals runners",
+    "/signals perf",
+    "/signals backtest",
+    "/signals backfill",
+    "/signals farms",
+    "/signals recent",
+    "/scanner",
+    "/scanner on",
+    "/scanner off",
+    "/scanner mark",
+    "/wiki",
+    "/keys",
+    "/keys set",
+    "/keys rm",
     "/exit",
 ]
-HELP = """[bold]Chat[/bold]: just type what you want, e.g.
+HELP = f"""[bold]Chat[/bold]: just type what you want, e.g.
   check https://dexscreener.com/solana/4k3Dyj... and buy 0.05 SOL with 2x TP and 30% SL
   check the trending coins and rug-check the top 3
   scan wallet <address>     ·     send 0.1 SOL to <address>     ·     launch a token called ...
 [bold]Commands[/bold]
   /wallet            balances           /history     trade ledger      /positions     open TP/SL positions
   /settings          configure keys & models (Anthropic, OpenRouter, RPC, slippage)
-  /reviews [id]      swap reviews       /cost        tokens & $ this session          /new  /sessions
-  /model [agent|review] <model-id>      /review gate|advise|off        /zdr           check ZDR endpoints
+  /reviews \\[id]      swap reviews       /cost        tokens & $ this session          /new  /sessions
+  /model \\[agent|review] <model-id>      /review gate|advise|off        /zdr           check ZDR endpoints
   /rpc               list + test RPC nodes      /rpc use <name|url>   switch node
   /rpc add <name> <url>    /rpc rm <name>       /rpc fallback on|off  auto-failover on same cluster
+[bold]Signals & market[/bold]
+  {escape(TRENCHES_HELP)}     Solana smallcap pulse + Fear & Greed
+  {escape(SIGNALS_HELP)}
+  /scanner \\[on|off|mark]   background launch scanner     /wiki \\[query|slug]   launchpads, farms, rugs
+  /keys \\[set|rm <name>]    data connectors (dune, dune_query_id, birdeye, helius)
   Ctrl+C  interrupt the agent        /exit  quit"""
 
 
@@ -156,7 +195,7 @@ def show_cost(env: AgentEnv) -> None:
     )
 
 
-async def handle_command(env: AgentEnv, line: str) -> bool:
+async def handle_command(env: AgentEnv, line: str, sink: AlertSink | None = None) -> bool:
     """Returns False to exit."""
     cmd, *rest = line.split()
     if cmd in ("/exit", "/quit"):
@@ -246,7 +285,7 @@ async def handle_command(env: AgentEnv, line: str) -> bool:
         else:
             console.print(
                 f"agent: {env.cfg.llm.agent_model}\nreview: {env.cfg.llm.review_model}\n"
-                "usage: /model agent|review <model-id> (e.g. claude-3-5-sonnet-latest or deepseek/deepseek-v4-flash)"
+                "usage: /model agent|review <model-id> (e.g. claude-sonnet-5-5 or deepseek/deepseek-v4-flash)"
             )
     elif cmd == "/review":
         if rest and rest[0] in ("gate", "advise", "off"):
@@ -257,6 +296,18 @@ async def handle_command(env: AgentEnv, line: str) -> bool:
         await zdr_check(env, verbose=True)
     elif cmd == "/rpc":
         await rpc_command(env, rest)
+    elif cmd == "/trenches":
+        await trenches_cmd(env, rest)
+    elif cmd == "/fg":
+        await fg_cmd(env)
+    elif cmd == "/signals":
+        await signals_cmd(env, rest)
+    elif cmd == "/scanner":
+        await scanner_cmd(env, rest, sink)
+    elif cmd == "/wiki":
+        wiki_cmd(env, rest)
+    elif cmd == "/keys":
+        await keys_cmd(env, rest)
     else:
         console.print("unknown command, /help")
     return True
@@ -384,23 +435,37 @@ async def main(
         except Exception as e:  # noqa: BLE001
             console.print(f"[yellow]wallet: {env.address} (balance unavailable: {e})[/yellow]")
         await zdr_check(env)
-        console.print("[dim]cmds: /wallet /positions /history /rpc /cost /model /review /new /sessions /exit[/dim]")
+        sink = AlertSink()
+        if env.cfg.signals.scanner and env.cluster == "mainnet":
+            console.print(f"[dim]{start_scanner(env, sink)} · /scanner off to stop[/dim]")
+        console.print(
+            "[dim]cmds: /wallet /positions /history /trenches /signals /scanner /wiki /keys /rpc /cost /model /exit[/dim]"
+        )
         console.print("[dim]tip:  Ctrl+C during agent = interrupt | paste DexScreener link to audit[/dim]\n")
 
+        from heavymetal.ui_signals import toolbar
+
         session = PromptSession(
-            history=FileHistory(str(paths.history_path())), completer=WordCompleter(COMMANDS, sentence=True)
+            history=FileHistory(str(paths.history_path())),
+            completer=WordCompleter(COMMANDS, sentence=True),
+            bottom_toolbar=lambda: toolbar(env),
+            refresh_interval=5,
         )
         while True:
+            sink.busy = False
+            sink.flush()
             try:
-                line = (await session.prompt_async(">> ")).strip()
+                with patch_stdout(raw=True):  # scanner alerts print above the prompt while you type
+                    line = (await session.prompt_async(">> ")).strip()
             except (EOFError, KeyboardInterrupt):
                 console.print(GOODBYE)
                 break
+            sink.busy = True
             if not line:
                 continue
             if line.startswith("/"):
                 try:
-                    if not await handle_command(env, line):
+                    if not await handle_command(env, line, sink):
                         console.print(GOODBYE)
                         break
                 except Exception as e:  # noqa: BLE001
@@ -451,5 +516,7 @@ async def main(
                 render_markdown(text)
             print()
     finally:
+        if env.scanner is not None:
+            await env.scanner.stop()
         await env.http.aclose()
         console.print("[dim]bye[/dim]")

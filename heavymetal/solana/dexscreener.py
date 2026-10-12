@@ -56,6 +56,22 @@ class Dexscreener:
         pairs = sorted(pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0, reverse=True)
         return [summarize_pair(p) for p in pairs]
 
+    async def tokens_batch(self, mints: list[str]) -> dict[str, dict]:
+        """Most liquid pair per mint, up to 30 mints per request."""
+        out: dict[str, dict] = {}
+        for i in range(0, len(mints), 30):
+            chunk = mints[i : i + 30]
+            data = await self._get(f"/tokens/v1/solana/{','.join(chunk)}")
+            pairs = data if isinstance(data, list) else data.get("pairs") or []
+            for p in pairs:
+                mint = (p.get("baseToken") or {}).get("address")
+                if mint not in chunk:
+                    continue
+                liq = (p.get("liquidity") or {}).get("usd") or 0
+                if mint not in out or liq > (out[mint].get("liquidity_usd") or 0):
+                    out[mint] = summarize_pair(p)
+        return out
+
     async def pair(self, pair_address: str) -> dict | None:
         data = await self._get(f"/latest/dex/pairs/solana/{pair_address}")
         pairs = data.get("pairs") or ([data["pair"]] if data.get("pair") else [])

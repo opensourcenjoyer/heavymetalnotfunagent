@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Farm filter**: wash loops, zero-reserve pools, round-tripping, fee/points farming, thin crowds, flat loops and a manual deny list (`heavymetal/signals/farm.py`). Farms are flagged like rugs: `token_audit` returns `HARD PASS / FARM` and the swap review blocks buys in code (`FARM_BLOCK`).
+- **Signal ledger**: every audit is recorded once (first call, frozen features), marked for 14 days, with 2x–100x milestones that are never deleted. `/signals runners | perf | backtest | backfill | farms | <id>` and the `signal_runners`, `signal_performance`, `signal_backtest`, `farm_scan` tools.
+- **Backtests** with lookahead-leak guards: walk-forward by time, features stamped at the signal, labels only after it, matured signals only, train-only scaling. Rules vs logistic model vs base rate (AUC, precision, recall, lift).
+- **Background scanner** (REPL, mainnet): PumpPortal launches/migrations and GeckoTerminal new pools, audited in code, alerts above the prompt, never trades. `/scanner on|off|mark`, `scanner_status`.
+- **Trenches**: Solana smallcap volume with disclosed gate drops, top-5 tickers, pace, regime, daily ledger (`dune` / `gt` / `est` sources), launch hold/ceiling ladders and the Trench Fear & Greed index. `/trenches`, `/fg`, `trenches_pulse`, bottom toolbar.
+- **Agent wiki**: bundled pages on launchpads, farm patterns, rug archetypes and past rugs; user notes and auto post-mortems in `~/.heavymetal/wiki`. `/wiki`, `wiki_search`, `wiki_read`, `wiki_note`; `token_audit` returns `wiki_refs`.
+- **Data connectors**: GeckoTerminal, DefiLlama (keyless); Dune, Birdeye, Helius (optional keys via `/keys set`, hidden input). `connector_status` tool.
+- Buys can be sized in dollars: `swap`, `pump_trade` and `buy_with_tpsl` accept `amount_usd` ("buy $5 of X"). The code converts it to SOL at the live SOL price (Jupiter, Dexscreener fallback) before review and signing.
+- The reviewer gets the USD value of every buy and `pct_of_holdings` for sells. A buy worth more than 120% of the user's stated dollar amount is blocked in code (`CORRECT_PARAMS`).
+
+### Fixed
+- Token audit card crashed (and was silently skipped) when the pair had no dex id or 1h volume.
+- `token_audit` counted "freeze/mint authority revoked" as positives when the on-chain lookup had failed.
+- Dollar-sized buys and "sell all" no longer get `CORRECT_PARAMS` from the reviewer, which made the agent retry in a loop in `gate` mode.
+- `buy_with_tpsl` now records the position: it compared the swap status with `"success"`, but confirmed swaps return `"confirmed"`. TP/SL tracking was never saved. `close_position` had the same bug.
+- `token_audit` counts as research for the mint it resolves (it takes a link/`target`, not `mint`). Previously, buys after an audit hit `RESEARCH_FIRST`.
+- `token_audit` crashed with `'>=' not supported between NoneType and int` on pools without a liquidity figure.
+- REDUCE_SIZE on `buy_with_tpsl` set `amount` instead of `sol_amount`, which made the tool fail with bad arguments.
+- Swap reviewer now works with only an Anthropic key: `claude-*` review models go through the Anthropic API, and the default Jev reviewer falls back to `claude-haiku-4-5` when no OpenRouter key is set (previously every swap failed closed with `REVIEW_UNAVAILABLE`).
+- Setting only `ANTHROPIC_API_KEY` now selects a Claude agent model (previously the default OpenRouter model was used with no key).
+- First-run wizard and `AnthropicProvider` default to `claude-sonnet-5-5` instead of the retired `claude-3-5-sonnet-latest`; removed retired/nonexistent Claude IDs from the model pickers.
+
 ## [0.0.1] - 2026-10-11
 
 ### Initial MVP Release
@@ -20,7 +43,7 @@ An autonomous, lightweight, open-source AI agent for Solana memecoins and token 
 #### 1. Core Architecture & Multi-Provider AI Engine
 - **Async Agent Loop**: Single turn-based asynchronous loop with tool calling, context windowing, and `Ctrl+C` interrupt handling without exiting the process.
 - **Native Anthropic Provider (`heavymetal/providers/anthropic_provider.py`)**:
-  - Full native support for Anthropic Claude models (`claude-sonnet-5-5`, `claude-opus-5-5`, `claude-fable-5-1`, `claude-haiku-5-5`, `claude-3-7-sonnet-latest`, `claude-3-5-sonnet-latest`, `claude-3-5-haiku-latest`, `claude-3-opus-latest`).
+  - Full native support for Anthropic Claude models (`claude-sonnet-5-5`, `claude-opus-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`).
   - Automatic conversion between internal conversation format and Anthropic's Messages API (separating system prompts, converting tool schemas to `input_schema`, and handling `tool_use` / `tool_result` blocks).
   - Per-model token pricing estimation and streaming support.
 - **OpenAI-Compatible & OpenRouter Provider (`heavymetal/providers/openai_compat.py`)**:

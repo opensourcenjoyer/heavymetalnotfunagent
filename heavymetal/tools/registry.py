@@ -75,7 +75,8 @@ def err(reason: str, **data) -> dict:
 
 async def execute(env, name: str, raw_args: str | dict) -> str:
     """Run a tool and always return a JSON string."""
-    from heavymetal.review import review_trade  # local import: avoids a cycle
+    from heavymetal.review import review_trade  # local imports: avoid a cycle
+    from heavymetal.tools.trade import usd_to_sol
 
     t = REGISTRY.get(name)
     if t is None:
@@ -89,9 +90,17 @@ async def execute(env, name: str, raw_args: str | dict) -> str:
     if t.mainnet_only and env.cluster != "mainnet":
         return json.dumps(err(f"{name} only works on mainnet (current cluster: {env.cluster})"))
 
+    # Buys sized in dollars: convert to SOL in code (not by the model) so review and signing see real SOL.
+    try:
+        args, trade_meta = await usd_to_sol(env, name, args)
+    except Exception as e:  # noqa: BLE001
+        return json.dumps(err(f"could not convert amount_usd: {e}"))
+    if trade_meta:
+        env.emit("usd_conversion", {"tool": name, **trade_meta})
+
     rcfg = env.cfg.review
     if t.irreversible and rcfg.mode != "off" and name in rcfg.actions:
-        verdict = await review_trade(env, name, args)
+        verdict = await review_trade(env, name, args, trade_meta)
         env.emit("review", verdict)
         if rcfg.mode == "gate" and verdict["verdict"] not in ("EXECUTE", "REDUCE_SIZE"):
             return json.dumps({"status": "blocked", "by": "review", **verdict}, default=str)
@@ -107,8 +116,11 @@ async def execute(env, name: str, raw_args: str | dict) -> str:
     except Exception as e:  # noqa: BLE001 - tools must never crash the loop
         result = err(f"{type(e).__name__}: {e}")
 
+    if trade_meta and isinstance(result, dict):
+        result = {**result, "usd_conversion": trade_meta}
     if isinstance(result, dict) and result.get("status") == "success" and name in RESEARCH_TOOLS:
-        mint = args.get("mint")
+        # token_audit takes a link/`target` and resolves it: use the mint it resolved to
+        mint = result.get("mint") if isinstance(result.get("mint"), str) else args.get("mint")
         if mint:
             env.research.setdefault(mint, set()).add(name)
     if t.external and isinstance(result, dict):

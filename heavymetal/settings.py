@@ -20,16 +20,12 @@ AVAILABLE_MODELS = [
     "claude-sonnet-5-5",
     "claude-opus-5-5",
     "claude-fable-5-1",
-    "claude-haiku-5-5",
-    "claude-3-7-sonnet-latest",
-    "claude-3-5-sonnet-latest",
-    "claude-3-5-haiku-latest",
-    "claude-3-opus-latest",
+    "claude-haiku-4-5",
     # OpenRouter models
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-chat",
     "deepseek/deepseek-r1",
-    "anthropic/claude-3.5-sonnet",
+    "anthropic/claude-sonnet-5-5",
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
     "google/gemini-2.5-pro",
@@ -38,8 +34,7 @@ AVAILABLE_MODELS = [
 
 REVIEW_MODELS = [
     "typesafe/jev-1.13",
-    "claude-haiku-5-5",
-    "claude-3-5-haiku-latest",
+    "claude-haiku-4-5",
     "deepseek/deepseek-v4-flash",
 ]
 

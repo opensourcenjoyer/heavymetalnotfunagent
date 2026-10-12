@@ -162,19 +162,49 @@ def render_audit_card(data: dict) -> None:
     )
     freeze = "✓ Revoked" if not s.get("freeze_authority") else "✗ Active"
     mint_auth = "✓ Revoked" if not s.get("mint_authority") else "⚠ Active"
-    lp = f"✓ {s.get('lp_locked_pct')}% Locked" if s.get("lp_locked_pct") else "⚠ Unlocked"
+    lp_pct = s.get("lp_locked_pct")
+    lp = (
+        f"✓ {lp_pct:.0f}% Locked" if lp_pct and lp_pct > 80 else (f"⚠ {lp_pct:.0f}% Locked" if lp_pct else "⚠ Unlocked")
+    )
     top10 = f"{h.get('top10_pct')}%" if h.get("top10_pct") is not None else "N/A"
     bubble_url = data.get("bubblemaps_url") or f"https://app.bubblemaps.io/sol/token/{mint}"
 
-    v_color = "green" if "BULLISH" in verdict or "APE" in verdict else ("yellow" if "SPECULATIVE" in verdict else "red")
+    v_color = (
+        "green"
+        if "BULLISH" in verdict or "APE" in verdict
+        else ("yellow" if "SPECULATIVE" in verdict else ("magenta" if "FARM" in verdict else "red"))
+    )
+    farm = data.get("farm") or {}
+    fm = farm.get("metrics") or {}
+    turnover = f"{fm['turnover']:,.0f}x liq" if fm.get("turnover") is not None else "n/a"
+    spw = (
+        f"{fm['swaps_per_wallet']:.1f} swaps/wallet ({fm.get('swaps_per_wallet_source')})"
+        if fm.get("swaps_per_wallet") is not None
+        else "swaps/wallet n/a"
+    )
+    farm_state = (
+        f"[bold magenta]FARM: {farm.get('kind')}[/bold magenta]"
+        if farm.get("is_farm")
+        else ("[yellow]⚠ churn[/yellow]" if farm.get("warnings") else "[green]✓ organic[/green]")
+    )
+    wiki = ", ".join(r["slug"] for r in data.get("wiki_refs") or [])
+    sig = data.get("signal") or {}
 
     body = (
-        f"[bold cyan]${sym}[/bold cyan] [dim]({mint[:6]}…{mint[-4:]})[/dim] | Venue: {m.get('dex', 'Solana').upper()}\n"
+        f"[bold cyan]${sym}[/bold cyan] [dim]({mint[:6]}…{mint[-4:]})[/dim] | Venue: {(m.get('dex') or 'Solana').upper()}\n"
         f"Price: [bold]{price}[/bold] | Liq: {liq} | MC/FDV: {fdv}\n"
-        f"1h Volume: ${m.get('volume_h1', 0):,.0f} ({m.get('price_change_h1', 0):+.1f}%) | Momentum: {ratio_str}\n"
+        f"1h Volume: ${m.get('volume_h1') or 0:,.0f} ({m.get('price_change_h1') or 0:+.1f}%) | Momentum: {ratio_str}\n"
         f"Safety: Mint: [{mint_auth}] | Freeze: [{freeze}] | LP: [{lp}]\n"
+        f"Volume: {farm_state} | turnover {turnover} | {spw}\n"
         f"Holders: Top 10 hold {top10} | Bubblemaps: [link={bubble_url}]{bubble_url}[/link]\n\n"
-        f"[bold {v_color}]VERDICT: {verdict}[/bold {v_color}]\n" + "\n".join(f" • {r}" for r in reasons[:3])
+        f"[bold {v_color}]VERDICT: {verdict}[/bold {v_color}]\n"
+        + "\n".join(f" • {r}" for r in reasons[:3])
+        + (f"\n[dim]wiki: {wiki}[/dim]" if wiki else "")
+        + (
+            f"\n[dim]signal #{sig.get('id')}{' (new)' if sig.get('new') else ''} · /signals {sig.get('id')}[/dim]"
+            if sig
+            else ""
+        )
     )
     console.print(Panel(body, title=f"🎯 Token Radar - ${sym}", border_style="magenta"))
 
