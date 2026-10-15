@@ -14,6 +14,7 @@ from heavymetal.solana.constants import (
     explorer_tx,
     is_valid_pubkey,
 )
+from heavymetal.solana.holdings import holdings
 from heavymetal.solana.tx import (
     ata_address,
     build_signed,
@@ -28,37 +29,6 @@ from heavymetal.tools.registry import err, ok, tool
 
 def to_raw(amount: float, decimals: int) -> int:
     return int((Decimal(str(amount)) * (10**decimals)).to_integral_value(rounding=ROUND_DOWN))
-
-
-async def holdings(env, address: str) -> dict:
-    sol = await env.rpc.balance_sol(address)
-    tokens = await env.rpc.token_accounts(address)
-    prices = {}
-    if env.cluster == "mainnet":
-        try:
-            prices = await env.jup.prices([SOL_MINT] + [t["mint"] for t in tokens])
-        except Exception:  # noqa: BLE001 - prices are best-effort
-            prices = {}
-    total = sol * prices.get(SOL_MINT, 0)
-    rows = []
-    for t in sorted(tokens, key=lambda t: -t["ui_amount"] * prices.get(t["mint"], 0)):
-        usd = t["ui_amount"] * prices[t["mint"]] if t["mint"] in prices else None
-        total += usd or 0
-        rows.append(
-            {
-                "mint": t["mint"],
-                "amount": t["ui_amount"],
-                "decimals": t["decimals"],
-                "usd": round(usd, 2) if usd is not None else None,
-            }
-        )
-    return {
-        "address": address,
-        "sol": sol,
-        "sol_usd_price": prices.get(SOL_MINT),
-        "tokens": rows,
-        "total_usd": round(total, 2) if prices else None,
-    }
 
 
 @tool("wallet_info", "The agent's own wallet: address, SOL balance, all SPL/Token-2022 holdings with USD values.")

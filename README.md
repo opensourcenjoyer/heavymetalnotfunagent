@@ -49,6 +49,21 @@ Other modes: `heavymetal --tui` (fullscreen TUI), `heavymetal --web` (browser), 
 
 Commands: `/help` `/wallet` `/positions` (active TP/SL targets) `/history` (trade ledger) `/reviews [id]` (swap review trail) `/rpc` (nodes) `/cost` `/settings` (models, keys, review mode, trading params) `/model agent|review <id>` `/review gate|advise|off` `/zdr` `/new` `/sessions` `/resume <id>` `/exit`. Ctrl+C interrupts the agent without quitting.
 
+## Wizzy: the public, read-only wizard
+
+`wizzy` is a second command in this package: a small wizard bear that reads tokens and wallets for anyone on
+Telegram, X and the web, with rug omens, wallet tarot, daily prophecies scored every Sunday, owl alerts, lessons
+with ranks and an Inner Circle (Telegram Stars, Solana Pay, x402 for full scrolls). It shares heavymetal's data
+and audit code but never loads the wallet and never trades.
+
+```bash
+uv sync --extra wizzy
+wizzy read BONK          # try it in the terminal
+wizzy serve              # website + Telegram + X + workers
+```
+
+See [docs/WIZZY.md](docs/WIZZY.md).
+
 ## Models: Anthropic & OpenAI-Compatible
 
 | Role | Default | Providers Supported |

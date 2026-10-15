@@ -31,12 +31,12 @@ from heavymetal.commands_signals import (
 from heavymetal.env import AgentEnv, build_env
 from heavymetal.memory import DB
 from heavymetal.solana import nodes, wallet
-from heavymetal.tools.wallet import holdings
+from heavymetal.solana.holdings import holdings
 from heavymetal.ui import (
-    BANNER,
     GOODBYE,
     Panel,
     StreamRenderer,
+    banner,
     console,
     make_event_handler,
     render_markdown,
@@ -412,7 +412,7 @@ async def main(
     cluster: str | None = None, rpc: str | None = None, resume: bool = False, prompt: str | None = None
 ) -> None:
     env = await bootstrap(cluster, rpc, resume)
-    renderer = StreamRenderer(console)
+    renderer = StreamRenderer(console, mascot_enabled=False if prompt else None)
     try:
         if prompt:  # one-shot mode
             tool_log: list[str] = []
@@ -423,7 +423,7 @@ async def main(
                 render_markdown(text)
             return
 
-        console.print(BANNER)
+        console.print(banner())
         console.print(
             f"[dim]agent {env.cfg.llm.agent_model} · review {env.cfg.llm.review_model} "
             f"({env.cfg.review.mode}) · ZDR {'on' if env.cfg.llm.zdr else 'off'} · {env.cluster} via "
@@ -475,6 +475,7 @@ async def main(
             renderer.reset()
             tool_log: list[str] = []
             env.on_event = make_event_handler(renderer, tool_log)
+            renderer.waiting()
 
             try:
                 text, interrupted = await run_with_interrupt(run_turn(env, line, renderer.on_delta))

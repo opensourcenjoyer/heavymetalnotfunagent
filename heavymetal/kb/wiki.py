@@ -80,6 +80,7 @@ class Wiki:
                     "body": body,
                     "origin": origin,
                     "path": str(f),
+                    "meta": meta,
                 }
         self.conn = sqlite3.connect(":memory:")
         self.conn.execute(

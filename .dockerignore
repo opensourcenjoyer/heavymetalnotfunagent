@@ -1,0 +1,14 @@
+.git
+.venv
+.ruff_cache
+.pytest_cache
+**/__pycache__
+tests
+scripts
+docs
+*.pdf
+# never ship a local wallet, config or database into an image
+.heavymetal
+wallet.json
+*.db
+config.toml

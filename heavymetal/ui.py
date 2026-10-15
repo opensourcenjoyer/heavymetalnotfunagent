@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
+from heavymetal import mascot
 from heavymetal.agent import short
 
 console = Console()
@@ -23,23 +27,64 @@ BANNER = r"""[bold magenta]
                         |___/            agent for Solana[/bold magenta]"""
 
 GOODBYE = "[dim]bye[/dim]"
+
+
+def banner():
+    """Startup banner: mascot beside the logo when there is room, above it on narrow terminals."""
+    text = Text.from_markup(BANNER.strip("\n"))
+    text.no_wrap = True
+    if not mascot.enabled(console):
+        return text
+    logo_width = max(len(ln) for ln in text.plain.splitlines())
+    if console.width >= mascot.WIDTH + 2 + logo_width:
+        return mascot.beside(mascot.idle(), text)
+    return Group(mascot.idle(), text)
+
+
 VERDICT_STYLE = {"EXECUTE": "green", "REDUCE_SIZE": "yellow"}
 
 
-class StreamRenderer:
-    """Streaming renderer with live Markdown parsing: incremental writes with full formatting."""
+class _WaitView:
+    """Live renderable for the wait between prompt and reply: animated mascot, status, reasoning tail."""
 
-    def __init__(self, console: Console):
+    def __init__(self, renderer: StreamRenderer):
+        self.r = renderer
+
+    def __rich__(self):
+        dots = "." * (int(time.monotonic() * 2) % 4)
+        right = Text(no_wrap=False)
+        right.append(f"{self.r.wait_label}{dots}\n", style="magenta")
+        width = max(20, self.r.console.width - mascot.WIDTH - 2)
+        tail = " ".join(self.r.reasoning_text.split())[-width * (mascot.HEIGHT - 3) :]
+        if tail:
+            right.append(("…" if len(tail) < len(self.r.reasoning_text) else "") + tail, style="dim italic")
+        return mascot.beside(mascot.waiting(), right)
+
+
+class StreamRenderer:
+    """Streaming renderer with live Markdown parsing: incremental writes with full formatting.
+
+    With the mascot on, the bear animates in a transient live view while the agent thinks or runs tools,
+    then talks beside the reply while it streams (when the terminal is wide enough for both).
+    """
+
+    CONTENT_MIN_WIDTH = 60  # text column needed to stream the reply beside the mascot
+
+    def __init__(self, console: Console, mascot_enabled: bool | None = None):
         self.console = console
+        self.mascot = mascot.enabled(console) if mascot_enabled is None else mascot_enabled
         self.started = False
         self.in_reasoning = False
         self.reasoning_chars = 0
         self.content_chars = 0
         self.status = ""
+        self.wait_label = "thinking"
         self._mute_reasoning = False
         self.reasoning_text = ""  # full reasoning, for the final block
         self.content_text = ""  # full streamed content
+        self._seg_start = 0  # where the current live segment starts in content_text
         self._live = None
+        self._wait = None
 
     def start(self):
         if not self.started:
@@ -49,15 +94,43 @@ class StreamRenderer:
             self._mute_reasoning = False
             self.reasoning_text = ""
             self.content_text = ""
+            self._seg_start = 0
             self._live = None
 
-    def stop(self):
-        if self._live is not None:
+    def waiting(self, label: str = "thinking"):
+        """Show the animated mascot until text starts streaming (no-op without the mascot)."""
+        self.start()
+        self.wait_label = label
+        if not self.mascot or self._wait is not None or self._live is not None:
+            return
+        self._wait = Live(
+            _WaitView(self), console=self.console, refresh_per_second=mascot.FPS, transient=True, redirect_stderr=False
+        )
+        self._wait.start()
+
+    def _stop_wait(self):
+        if self._wait is not None:
             try:
-                self._live.stop()
+                self._wait.stop()
             except Exception:  # noqa: BLE001
                 pass
-            self._live = None
+            self._wait = None
+
+    def _stop_live(self, final: bool):
+        if self._live is None:
+            return
+        try:
+            if final and self._beside:  # leave the bear resting beside the finished text
+                self._live.update(self._content_view(mascot.idle()), refresh=True)
+            self._live.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self._live = None
+
+    def stop(self):
+        self._stop_wait()
+        if self._live is not None:
+            self._stop_live(final=True)
         elif self.started and not self.streamed_anything:
             self.console.print()
         self.started = False
@@ -70,9 +143,11 @@ class StreamRenderer:
         self.reasoning_chars = 0
         self.content_chars = 0
         self.status = ""
+        self.wait_label = "thinking"
         self._mute_reasoning = False
         self.reasoning_text = ""
         self.content_text = ""
+        self._seg_start = 0
         self._live = None
 
     def on_delta(self, kind: str, text: str):
@@ -82,6 +157,9 @@ class StreamRenderer:
 
         if kind == "reasoning":
             if self.content_chars or self._mute_reasoning:
+                return
+            if self._wait is not None:  # shown as a tail beside the mascot; full text goes in the final panel
+                self.reasoning_text += text
                 return
             if not self.in_reasoning:
                 self.console.print("[dim italic]🧠 ", end="")
@@ -104,34 +182,41 @@ class StreamRenderer:
             return
 
         if kind == "content":
+            self._stop_wait()
             if self.in_reasoning:
                 self.console.print("\n", end="")
                 self.in_reasoning = False
 
-            self.content_text += text
-            self.content_chars += len(text)
-
             if self._live is None and self.console.is_terminal:
-                from rich.live import Live
-
+                self._seg_start = len(self.content_text)
                 self._live = Live(console=self.console, auto_refresh=False, vertical_overflow="visible")
                 self._live.start()
 
+            self.content_text += text
+            self.content_chars += len(text)
+
             if self._live is not None:
-                self._live.update(Markdown(self.content_text), refresh=True)
+                self._live.update(self._content_view(mascot.talking() if self._beside else None), refresh=True)
             else:
                 self.console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
 
+    @property
+    def _beside(self) -> bool:
+        return self.mascot and self.console.width >= mascot.WIDTH + 2 + self.CONTENT_MIN_WIDTH
+
+    def _content_view(self, frame=None):
+        md = Markdown(self.content_text[self._seg_start :])
+        return mascot.beside(frame, md) if frame is not None else md
+
     def set_status(self, status: str):
-        if self._live is not None:
-            try:
-                self._live.stop()
-            except Exception:  # noqa: BLE001
-                pass
-            self._live = None
+        """Tool started (``status`` = tool name) or finished (empty): park the text, keep the bear busy."""
+        self._stop_wait()
+        self._stop_live(final=True)
         if status and self.status != status:
             self.console.print(f"[magenta]→ {status}[/magenta]")
         self.status = status
+        if self.started:
+            self.waiting(f"running {status}" if status else "thinking")
 
     @property
     def streamed_anything(self) -> bool:

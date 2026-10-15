@@ -322,7 +322,7 @@ async def close_position(env, mint: str, reason: str = "MANUAL"):
         sell_res = err(f"pumpportal: {e}")
     if not succeeded(sell_res):
         # Fall back to swap
-        from heavymetal.tools.wallet import holdings
+        from heavymetal.solana.holdings import holdings
 
         h = await holdings(env, env.address)
         token_bal = next((t["amount"] for t in h["tokens"] if t["mint"] == target_mint), 0)

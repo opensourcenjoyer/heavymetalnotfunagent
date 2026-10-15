@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Wizzy** (`wizzy` command, `heavymetal/wizzy/`, `uv sync --extra wizzy`): a public, read-only wizard for Telegram, X and the web. Facts-only readings with an output guard (numbers, addresses, links and tickers must come from the facts), rug-scrying omens, wallet tarot, apprentice lessons with quiz ranks, prophecies with frozen baselines and a Sunday scoreboard, spellbook owl alerts, scroll pages with OG images and charts, x402 paywalled full scrolls, Inner Circle via Telegram Stars or Solana Pay, and familiar perks. Never loads the wallet; `tests/test_wizzy_isolation.py` enforces it. See `docs/WIZZY.md`.
+- `build_reader_env()`: a keyless, mainnet-only env for read-only services; `heavymetal/worker.py` `BackgroundWorker` shared by the scanner and Wizzy; `holdings` and `summarize_tx` moved to `heavymetal/solana/` (re-exported from the tools).
+- Apprentice lessons in `heavymetal/wiki/lessons/` are searchable by the agent's `wiki_search` too.
+- Connectors: Birdeye hourly OHLCV, DefiLlama protocol TVL/fees by token, Helius wallet swaps.
+- **Mascot**: a bear in a wizard hat, drawn in Braille dots (`heavymetal/mascot.py`). It sits beside the startup banner, animates while the agent thinks or runs tools (sparkles, blinking, live reasoning tail), and talks beside the reply while it streams. `HEAVYMETAL_MASCOT=0` turns it off; it is skipped on narrow or non-interactive terminals and in `-p` mode.
 - **Farm filter**: wash loops, zero-reserve pools, round-tripping, fee/points farming, thin crowds, flat loops and a manual deny list (`heavymetal/signals/farm.py`). Farms are flagged like rugs: `token_audit` returns `HARD PASS / FARM` and the swap review blocks buys in code (`FARM_BLOCK`).
 - **Signal ledger**: every audit is recorded once (first call, frozen features), marked for 14 days, with 2x–100x milestones that are never deleted. `/signals runners | perf | backtest | backfill | farms | <id>` and the `signal_runners`, `signal_performance`, `signal_backtest`, `farm_scan` tools.
 - **Backtests** with lookahead-leak guards: walk-forward by time, features stamped at the signal, labels only after it, matured signals only, train-only scaling. Rules vs logistic model vs base rate (AUC, precision, recall, lift).
@@ -21,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The reviewer gets the USD value of every buy and `pct_of_holdings` for sells. A buy worth more than 120% of the user's stated dollar amount is blocked in code (`CORRECT_PARAMS`).
 
 ### Fixed
+- Claude cost estimates used outdated prices (Opus 5.5 was billed at $15/$75 per million tokens instead of $4/$20; Haiku 5.5 was missing).
+- Streamed replies no longer repeat earlier text when the agent writes, runs a tool, then writes again.
 - Token audit card crashed (and was silently skipped) when the pair had no dex id or 1h volume.
 - `token_audit` counted "freeze/mint authority revoked" as positives when the on-chain lookup had failed.
 - Dollar-sized buys and "sell all" no longer get `CORRECT_PARAMS` from the reviewer, which made the agent retry in a loop in `gate` mode.

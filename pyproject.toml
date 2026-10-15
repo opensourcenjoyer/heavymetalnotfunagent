@@ -39,6 +39,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.8"]
+wizzy = [
+    "aiogram>=3.13",
+    "tweepy[async]>=4.14",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pillow>=10",
+    "markdown-it-py>=3",
+    "x402[svm,fastapi]>=2",
+    "sentry-sdk>=2",
+]
 
 [project.urls]
 Homepage = "https://github.com/opensourcenjoyer/heavymetalnotfunagent"
@@ -48,6 +59,7 @@ Changelog = "https://github.com/opensourcenjoyer/heavymetalnotfunagent/blob/main
 
 [project.scripts]
 heavymetal = "heavymetal.main:run"
+wizzy = "heavymetal.wizzy.main:run"
 
 [build-system]
 requires = ["hatchling>=1.27"]

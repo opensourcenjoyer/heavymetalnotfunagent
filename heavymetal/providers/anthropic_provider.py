@@ -22,15 +22,25 @@ from heavymetal.providers.types import DeltaCallback, ProviderResponse, ToolCall
 
 # Pricing per 1M tokens ($in, $out)
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "claude-sonnet-5-5": (3.0, 15.0),
-    "claude-opus-5-5": (15.0, 75.0),
-    "claude-fable-5-1": (3.0, 15.0),
+    # $ per 1M input / output tokens (first-party API). Longest prefixes first: matching is by substring.
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4": (3.0, 15.0),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-3-7-sonnet": (3.0, 15.0),
     "claude-3-5-sonnet": (3.0, 15.0),
     "claude-3-5-haiku": (0.80, 4.0),
     "claude-3-opus": (15.0, 75.0),
 }
+# Models that accept server-side refusal fallbacks ("default" routing by refusal category).
+FALLBACK_MODELS = ("claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5")
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
 class AnthropicProviderError(RuntimeError):
@@ -122,6 +132,10 @@ def estimate_cost(model_name: str, in_tokens: int, out_tokens: int) -> float:
     return round((in_tokens * 3.0 + out_tokens * 15.0) / 1_000_000, 6)
 
 
+class RefusalError(AnthropicProviderError):
+    """The model (and any fallback) declined the request."""
+
+
 class AnthropicProvider:
     is_openrouter: bool = False
 
@@ -165,6 +179,62 @@ class AnthropicProvider:
             return await self._call(kw)
         except anthropic.APIError as e:
             raise AnthropicProviderError(f"Anthropic error ({self.model}): {e}") from e
+
+    async def parse_structured(
+        self,
+        system_blocks: list[dict],
+        user: str,
+        schema: dict,
+        *,
+        effort: str | None = None,
+        max_tokens: int = 16000,
+        model: str | None = None,
+    ) -> tuple[dict, ProviderResponse]:
+        """One structured-output call: returns (parsed JSON matching schema, response).
+
+        system_blocks: Anthropic system content blocks (put cache_control on the last stable one).
+        Uses server-side refusal fallbacks on models that support them; raises RefusalError on refusal.
+        """
+        model = model or self.model
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if effort:
+            output_config["effort"] = effort
+        kw: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_blocks,
+            "messages": [{"role": "user", "content": user}],
+            "output_config": output_config,
+        }
+        try:
+            if model.startswith(FALLBACK_MODELS):
+                resp = await self.client.beta.messages.create(**kw, betas=[FALLBACK_BETA], fallbacks="default")
+            else:
+                resp = await self.client.messages.create(**kw)
+        except anthropic.APIError as e:
+            raise AnthropicProviderError(f"Anthropic error ({model}): {e}") from e
+        if resp.stop_reason == "refusal":
+            raise RefusalError(f"{model} declined the request")
+        text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise AnthropicProviderError(f"{model} returned invalid JSON (stop_reason={resp.stop_reason})") from e
+        usage = resp.usage
+        tin, tout = usage.input_tokens, usage.output_tokens
+        cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+        written = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        served_by = resp.model or model
+        pin, pout = next((v for k, v in MODEL_PRICING.items() if k in served_by.lower()), (3.0, 15.0))
+        cost = round((tin * pin + written * pin * 1.25 + cached * pin * 0.1 + tout * pout) / 1_000_000, 6)
+        return data, ProviderResponse(
+            content=text,
+            tool_calls=[],
+            input_tokens=tin + cached + written,
+            output_tokens=tout,
+            cost_usd=cost,
+            model=served_by,
+        )
 
     async def _call(self, kw: dict) -> ProviderResponse:
         resp = await self.client.messages.create(**kw)

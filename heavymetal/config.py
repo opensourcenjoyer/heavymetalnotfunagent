@@ -70,6 +70,17 @@ class KeysConfig:
     dune_query_id: str = ""  # your saved copy of the Trenches SQL (/trenches sql)
     birdeye: str = ""  # Birdeye API key: unique wallets per token (farm filter)
     helius: str = ""  # Helius API key: parsed swaps per wallet (fee-farm detection)
+    # Wizzy (public read-only bot): see heavymetal/wizzy
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    x_bearer_token: str = ""
+    x_api_key: str = ""
+    x_api_secret: str = ""
+    x_access_token: str = ""
+    x_access_secret: str = ""
+    x_user_id: str = ""
+    quickchart_api_key: str = ""
+    sentry_dsn: str = ""
 
 
 @dataclass
@@ -100,6 +111,49 @@ class SignalsConfig:
 
 
 @dataclass
+class WizzyConfig:
+    """Wizzy: the public, read-only wizard bot (Telegram, X, scroll pages). Never trades."""
+
+    enabled: bool = True  # global kill switch
+    tg_enabled: bool = True
+    x_enabled: bool = False
+    writer_model: str = "claude-opus-5-5"
+    writer_effort: str = "medium"
+    router_model: str = "claude-haiku-5-5"
+    base_url: str = "http://localhost:8080"  # public URL of the scroll site
+    host: str = "0.0.0.0"
+    port: int = 8080
+    prophecies_per_day: int = 3
+    prophecy_hours_utc: list[int] = field(default_factory=lambda: [9, 15, 21])
+    prophecy_channel: str = ""  # Telegram channel id/@name for prophecies and scoreboards
+    free_readings_per_hour: int = 5
+    inner_readings_per_hour: int = 30
+    dedupe_ca_minutes: int = 10
+    facts_ttl_s: int = 600
+    max_concurrent_readings: int = 4
+    scroll_price_usdc: float = 0.25
+    x402_network: str = (
+        "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"  # devnet; mainnet: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+    )
+    pay_to: str = ""  # public address receiving payments; its key never lives on this server
+    facilitator_url: str = "https://x402.org/facilitator"
+    inner_price_stars: int = 500
+    inner_price_usdc: float = 9.0
+    inner_days: int = 30
+    daily_llm_budget_usd: float = 5.0
+    x_daily_reply_cap: int = 100
+    x_reply_delay_s: int = 20
+    x_poll_interval_s: int = 90
+    free_watches: int = 1
+    inner_watches: int = 10
+    max_watches_global: int = 500
+    tarot_max_signatures: int = 40
+    gecko_budget_per_min: int = 12  # share of GeckoTerminal's 20/min left for Wizzy
+    admin_tg_chat: str = ""
+    cookie_secret: str = ""  # signs paid-scroll cookies; generated on first run if empty
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     review: ReviewConfig = field(default_factory=ReviewConfig)
@@ -107,6 +161,7 @@ class Config:
     trade: TradeConfig = field(default_factory=TradeConfig)
     keys: KeysConfig = field(default_factory=KeysConfig)
     signals: SignalsConfig = field(default_factory=SignalsConfig)
+    wizzy: WizzyConfig = field(default_factory=WizzyConfig)
 
     def node_name(self, url: str | None = None) -> str | None:
         url = url or self.solana.rpc_url
@@ -156,6 +211,40 @@ def normalize(cfg: Config) -> Config:
     return cfg
 
 
+WIZZY_KEY_ENV = {
+    "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
+    "telegram_webhook_secret": "TELEGRAM_WEBHOOK_SECRET",
+    "x_bearer_token": "X_BEARER_TOKEN",
+    "x_api_key": "X_API_KEY",
+    "x_api_secret": "X_API_SECRET",
+    "x_access_token": "X_ACCESS_TOKEN",
+    "x_access_secret": "X_ACCESS_SECRET",
+    "x_user_id": "X_USER_ID",
+    "quickchart_api_key": "QUICKCHART_API_KEY",
+    "sentry_dsn": "SENTRY_DSN",
+}
+
+
+def _coerce(raw: str, like):
+    if isinstance(like, bool):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(like, int):
+        return int(raw)
+    if isinstance(like, float):
+        return float(raw)
+    if isinstance(like, list):
+        return [int(x) if x.strip().lstrip("-").isdigit() else x.strip() for x in raw.split(",") if x.strip()]
+    return raw
+
+
+def _wizzy_env(w, env) -> None:
+    """WIZZY_<FIELD> overrides any [wizzy] setting (for containers), e.g. WIZZY_BASE_URL, WIZZY_X_ENABLED=true."""
+    for name in w.__dataclass_fields__:
+        raw = env.get(f"WIZZY_{name.upper()}")
+        if raw is not None:
+            setattr(w, name, _coerce(raw, getattr(w, name)))
+
+
 def _merge(dc, data: dict):
     for k, v in (data or {}).items():
         if hasattr(dc, k):
@@ -167,7 +256,7 @@ def load() -> Config:
     p = paths.config_path()
     if p.exists():
         data = tomllib.loads(p.read_text())
-        for section in ("llm", "review", "solana", "trade", "keys", "signals"):
+        for section in ("llm", "review", "solana", "trade", "keys", "signals", "wizzy"):
             _merge(getattr(cfg, section), data.get(section, {}))
     env = os.environ
     cfg.llm.api_key = env.get("OPENROUTER_API_KEY", cfg.llm.api_key)
@@ -179,6 +268,9 @@ def load() -> Config:
     cfg.keys.dune_query_id = env.get("HM_DUNE_QUERY_ID", cfg.keys.dune_query_id)
     cfg.keys.birdeye = env.get("BIRDEYE_API_KEY", cfg.keys.birdeye)
     cfg.keys.helius = env.get("HELIUS_API_KEY", cfg.keys.helius)
+    for field_name, var in WIZZY_KEY_ENV.items():
+        setattr(cfg.keys, field_name, env.get(var, getattr(cfg.keys, field_name)))
+    _wizzy_env(cfg.wizzy, env)
     # Anthropic-only setup: an OpenRouter model id can't be served, so default to Claude.
     if (
         cfg.llm.anthropic_key

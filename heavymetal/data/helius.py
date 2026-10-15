@@ -59,3 +59,53 @@ class Helius:
         r.raise_for_status()
         txs = r.json() if isinstance(r.json(), list) else []
         return self.cache.put(address, swaps_per_wallet(txs))
+
+    async def wallet_swaps(self, address: str, limit: int = 100) -> list[dict]:
+        """A wallet's recent parsed swaps, summarized like solana.txsummary.summarize_tx (newest first)."""
+        key = self.key_fn()
+        if not key:
+            raise MissingKey("helius")
+        ck = f"wallet:{address}:{limit}"
+        hit = self.cache.get(ck)
+        if hit is not None:
+            return hit
+        await self.limit.wait()
+        r = await self.http.get(
+            f"{BASE}/addresses/{address}/transactions",
+            params={"api-key": key, "type": "SWAP", "limit": min(limit, 100)},
+            timeout=30,
+        )
+        if r.status_code in (401, 403):
+            raise ConnectorError(f"helius rejected the key ({r.status_code})")
+        r.raise_for_status()
+        txs = r.json() if isinstance(r.json(), list) else []
+        return self.cache.put(ck, [summarize_helius_tx(t, address) for t in txs])
+
+
+def summarize_helius_tx(t: dict, owner: str) -> dict:
+    deltas: dict[str, float] = {}
+    for tr in t.get("tokenTransfers") or []:
+        amt = float(tr.get("tokenAmount") or 0)
+        if tr.get("toUserAccount") == owner:
+            deltas[tr["mint"]] = deltas.get(tr["mint"], 0) + amt
+        if tr.get("fromUserAccount") == owner:
+            deltas[tr["mint"]] = deltas.get(tr["mint"], 0) - amt
+    sol = 0.0
+    for nt in t.get("nativeTransfers") or []:
+        lamports = float(nt.get("amount") or 0) / 1e9
+        if nt.get("toUserAccount") == owner:
+            sol += lamports
+        if nt.get("fromUserAccount") == owner:
+            sol -= lamports
+    deltas = {m: round(v, 6) for m, v in deltas.items() if abs(v) > 0}
+    up = any(v > 0 for v in deltas.values())
+    down = any(v < 0 for v in deltas.values())
+    kind = "buy" if up and sol < 0 else "sell" if down and sol > 0 else "swap" if up or down else "other"
+    return {
+        "signature": t.get("signature"),
+        "time": t.get("timestamp"),
+        "kind": kind,
+        "sol_delta": round(sol, 6),
+        "token_deltas": deltas,
+        "failed": bool(t.get("transactionError")),
+    }

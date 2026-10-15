@@ -14,22 +14,22 @@ import asyncio
 import contextlib
 import json
 import time
-from collections import deque
+
+from heavymetal.worker import BackgroundWorker
 
 RECHECK_S = (300, 900, 2700, 7200, 21600)  # pending launches: re-check at +5m, +15m, +45m, +2h, +6h
 MIGRATION_RECHECK_S = (60, 300, 900, 3600)
 MAX_PENDING = 3000
 
 
-class Scanner:
+class Scanner(BackgroundWorker):
+    name = "scanner"
+
     def __init__(self, env, on_alert=None):
-        self.env = env
-        self.on_alert = on_alert
-        self.tasks: list[asyncio.Task] = []
+        super().__init__(env, on_alert)
         self.pending: dict[str, dict] = {}
         self.queued: set[str] = set()
         self.queue: asyncio.Queue = asyncio.Queue()
-        self.alerts: deque = deque(maxlen=50)
         self.stats = {
             "ws_seen": 0,
             "gt_seen": 0,
@@ -40,27 +40,21 @@ class Scanner:
             "errors": 0,
             "marks": 0,
         }
-        self.started_at: float | None = None
         self.ws_connected = False
-        self.last_error: str | None = None
         self.last_scan: float | None = None
         self.last_mark: float | None = None
         self.pulse: dict | None = None
         self.last_pulse: float | None = None
 
     # ------------------------------------------------------------------ lifecycle
-    @property
-    def running(self) -> bool:
-        return any(not t.done() for t in self.tasks)
-
-    def start(self) -> bool:
-        if self.running:
-            return True
+    def can_start(self) -> bool:
         if self.env.cluster != "mainnet":
             self.last_error = f"scanner needs mainnet (cluster: {self.env.cluster})"
             return False
-        self.started_at = time.time()
-        loops = (
+        return True
+
+    def loops(self):
+        return (
             self._ws_loop,
             self._gt_loop,
             self._promote_loop,
@@ -68,40 +62,10 @@ class Scanner:
             self._mark_loop,
             self._pulse_loop,
         )
-        self.tasks = [asyncio.create_task(self._guard(fn), name=f"scanner:{fn.__name__}") for fn in loops]
-        return True
 
     async def stop(self) -> None:
-        for t in self.tasks:
-            t.cancel()
-        for t in self.tasks:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
-        self.tasks = []
+        await super().stop()
         self.ws_connected = False
-
-    async def _guard(self, fn) -> None:
-        """Keep a loop alive across errors; back off on repeated failures."""
-        backoff = 5
-        while True:
-            try:
-                await fn()
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001
-                self.stats["errors"] += 1
-                self.last_error = f"{fn.__name__}: {type(e).__name__}: {e}"[:200]
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 120)
-
-    def _alert(self, kind: str, payload: dict) -> None:
-        item = {"kind": kind, "ts": time.time(), **payload}
-        self.alerts.append(item)
-        cb = self.on_alert
-        if callable(cb):
-            with contextlib.suppress(Exception):
-                cb(kind, item)
 
     def status(self) -> dict:
         from heavymetal.signals.ledger import counts_today
