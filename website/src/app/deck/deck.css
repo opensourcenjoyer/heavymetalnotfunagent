@@ -1,0 +1,51 @@
+/* Pitch deck (/deck). Only one slide is shown on screen; print puts each slide on its own 1920x1080 page. */
+
+.deck-slide[data-current="false"] {
+  display: none;
+}
+
+.deck-bear .bear {
+  font-size: 27px;
+}
+.deck-bear-sm .bear {
+  font-size: 19px;
+}
+
+/* the site's ASCII widgets are sized for a page; scale them up for a 1920px stage */
+.deck-zoom {
+  zoom: 1.25;
+}
+
+@media print {
+  @page {
+    size: 1920px 1080px;
+    margin: 0;
+  }
+  html,
+  body {
+    background: var(--background);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .deck-screen {
+    position: static !important;
+    overflow: visible !important;
+  }
+  .deck-stage {
+    position: static !important;
+    transform: none !important;
+    box-shadow: none !important;
+    height: auto !important;
+  }
+  .deck-slide {
+    display: flex !important;
+    break-after: page;
+  }
+  .deck-slide:last-child {
+    break-after: auto;
+  }
+  .deck-controls,
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+}
