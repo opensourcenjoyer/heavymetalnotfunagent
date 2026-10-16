@@ -18,8 +18,9 @@ build/
 *.swp
 .DS_Store
 
-# Archives
+# Archives / documents
 *.zip
+*.pdf
 
 # Secrets and local state: never commit keys, configs or databases
 .env
