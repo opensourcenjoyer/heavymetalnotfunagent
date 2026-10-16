@@ -5,7 +5,7 @@ export const site = {
   title: "Wizzy reads the runes",
   description:
     "A small wizard bear who reads Solana tokens and wallets from on-chain data. Facts computed in code; the model only phrases them.",
-  url: "https://wizzy.example", // TODO: public domain
+  url: "https://heavymetalnot.fun",
   links: {
     x: "https://x.com/useing2",
     github: "https://github.com/opensourcenjoyer/heavymetalnotfunagent",
