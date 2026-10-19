@@ -1,3 +1,7 @@
+import asyncio
+
+import httpx
+import pytest
 from solders.hash import Hash
 from solders.keypair import Keypair
 from solders.message import MessageV0
@@ -8,7 +12,15 @@ from solders.transaction import VersionedTransaction
 from heavymetal.agent import sanitize
 from heavymetal.providers.openai_compat import parse_json_object
 from heavymetal.solana.constants import TOKEN_PROGRAM
-from heavymetal.solana.ipfs import placeholder_png
+from heavymetal.solana.ipfs import (
+    MAX_IMAGE_BYTES,
+    ImageSourceError,
+    check_image_url,
+    fetch_image_url,
+    load_image,
+    placeholder_png,
+    resolve_local_image,
+)
 from heavymetal.solana.tx import ata_address, build_signed, ix_transfer_sol, priority_ixs, sign_external
 from heavymetal.tools.scan import summarize_tx
 from heavymetal.tools.trade import describe_trade
@@ -107,3 +119,77 @@ def test_summarize_buy_tx():
 def test_placeholder_png():
     png = placeholder_png()
     assert png.startswith(b"\x89PNG") and len(png) > 100
+
+
+def test_launch_image_cannot_leave_images_dir(tmp_path):
+    home = tmp_path / "hm"
+    images = home / "images"
+    images.mkdir(parents=True)
+    (home / "wallet.json").write_text("[1,2,3]")
+    (images / "logo.png").write_bytes(b"png")
+    assert resolve_local_image("logo.png", images).read_bytes() == b"png"
+    for bad in ("../wallet.json", str(home / "wallet.json"), "~/.heavymetal/wallet.json", "/etc/passwd"):
+        with pytest.raises(ImageSourceError):
+            resolve_local_image(bad, images)
+    # a symlink inside the folder pointing outside is refused too
+    (images / "link.png").symlink_to(home / "wallet.json")
+    with pytest.raises(ImageSourceError):
+        resolve_local_image("link.png", images)
+
+
+def test_launch_image_url_cannot_hit_local_network():
+    for bad in (
+        "http://127.0.0.1:8899/",
+        "http://localhost/wallet.json",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/x.png",
+        "http://[::1]/x.png",
+        "http://[::ffff:127.0.0.1]/x.png",
+        "file:///etc/passwd",
+    ):
+        with pytest.raises(ImageSourceError):
+            asyncio.run(check_image_url(bad))
+
+
+def test_launch_image_url_fetch_boundary():
+    public = "http://93.184.216.34"
+    mb = b"x" * (1024 * 1024)
+
+    class Chunked(httpx.AsyncByteStream):  # no content-length: the cap must trigger while streaming
+        async def __aiter__(self):
+            for _ in range(MAX_IMAGE_BYTES // len(mb) + 1):
+                yield mb
+
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(str(req.url))
+        path = req.url.path
+        if path == "/ok.png":
+            return httpx.Response(200, content=b"png", headers={"content-type": "image/png"})
+        if path == "/to-ok":
+            return httpx.Response(302, headers={"location": f"{public}/ok.png"})
+        if path == "/to-local":
+            return httpx.Response(302, headers={"location": "http://127.0.0.1:8899/wallet.json"})
+        if path == "/loop":
+            return httpx.Response(302, headers={"location": f"{public}/loop"})
+        if path == "/text":
+            return httpx.Response(200, content=b"nope", headers={"content-type": "text/plain"})
+        if path == "/big":
+            return httpx.Response(200, content=mb * 6, headers={"content-type": "image/png"})
+        if path == "/big-chunked":
+            return httpx.Response(200, stream=Chunked(), headers={"content-type": "image/png"})
+        return httpx.Response(404)
+
+    async def go():
+        # follow_redirects=True like the real env client: the fetch must override it and check each hop itself
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+        assert await fetch_image_url(http, f"{public}/ok.png") == b"png"
+        assert await fetch_image_url(http, f"{public}/to-ok") == b"png"
+        for bad in ("/to-local", "/loop", "/text", "/big", "/big-chunked", "/missing"):
+            with pytest.raises(ImageSourceError):
+                await fetch_image_url(http, f"{public}{bad}")
+        assert await load_image(http, "  ") == placeholder_png()
+
+    asyncio.run(go())
+    assert not [u for u in seen if "127.0.0.1" in u]  # refused before any request reached the local host

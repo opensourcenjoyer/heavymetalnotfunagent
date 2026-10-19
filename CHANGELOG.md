@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `launch_token` no longer reads arbitrary local paths. The `image` argument is the model's, so injected text could point it at `~/.heavymetal/wallet.json` and publish the private key to public IPFS as the token image. Local images are now limited to `$HEAVYMETAL_HOME/images/` (symlinks resolved, traversal refused). Image URLs must resolve to a public address (no localhost, LAN or cloud-metadata hosts; every redirect hop is checked before it is requested), return an `image/*` content type and stay under 5 MB (capped while downloading).
+- `send_sol` / `send_token` are gated in code: the recipient must appear as a whole address in a user message. An address that only shows up in tool results (token descriptions, memos, web pages) is blocked as `INJECTION_BLOCK` before anything is signed. The guard proves provenance, not intent: an address the user pasted for research also counts, so a send-aware review remains a follow-up.
+
 ### Added
 - **Wizzy** (`wizzy` command, `heavymetal/wizzy/`, `uv sync --extra wizzy`): a public, read-only wizard for Telegram, X and the web. Facts-only readings with an output guard (numbers, addresses, links and tickers must come from the facts), rug-scrying omens, wallet tarot, apprentice lessons with quiz ranks, prophecies with frozen baselines and a Sunday scoreboard, spellbook owl alerts, scroll pages with OG images and charts, x402 paywalled full scrolls, Inner Circle via Telegram Stars or Solana Pay, and familiar perks. Never loads the wallet; `tests/test_wizzy_isolation.py` enforces it. See `docs/WIZZY.md`.
 - `build_reader_env()`: a keyless, mainnet-only env for read-only services; `heavymetal/worker.py` `BackgroundWorker` shared by the scanner and Wizzy; `holdings` and `summarize_tx` moved to `heavymetal/solana/` (re-exported from the tools).

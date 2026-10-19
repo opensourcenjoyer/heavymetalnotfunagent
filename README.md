@@ -276,7 +276,7 @@ Transfers (`send_sol`, `send_token` with recipient token-account creation) were 
 ## Risks (read this)
 
 - **Autonomous: no confirmation prompts.** The agent signs transactions on its own. It can lose money.
-- **The review reduces risk, it doesn't remove it.** It's a model; it can be wrong. Sends and launches are not model-reviewed by default.
+- **The review reduces risk, it doesn't remove it.** It's a model; it can be wrong. Sends and launches are not model-reviewed by default. Sends are gated in code instead: the recipient must appear in a message you typed, never only in tool results. That proves where the address came from, not that you meant to pay it: an address you pasted for research counts as typed, so a send-aware review is still a follow-up. Launch images are read only from `~/.heavymetal/images/` or a public URL (every redirect hop is checked).
 - **Prompt injection.** Token names, descriptions and memos are untrusted text written by strangers.
 - **The private key is on disk** at `~/.heavymetal/wallet.json`. Anyone with that file controls the funds. Back it up.
 - **TP/SL targets are not executed automatically.** They are tracked and flagged in `/positions`; a sell happens only when you or the agent close the position.

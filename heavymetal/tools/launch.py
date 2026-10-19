@@ -18,7 +18,10 @@ from heavymetal.tools.registry import err, ok, tool
         "name": {"type": "string"},
         "symbol": {"type": "string"},
         "description": {"type": "string"},
-        "image": {"type": "string", "description": "local path or URL; omitted = generated placeholder"},
+        "image": {
+            "type": "string",
+            "description": "URL or a file name inside ~/.heavymetal/images; omitted = generated placeholder",
+        },
         "twitter": {"type": "string"},
         "telegram": {"type": "string"},
         "website": {"type": "string"},
@@ -48,7 +51,10 @@ async def launch_token(
     bal = await env.rpc.balance_sol(env.address)
     if bal < dev_buy_sol + 0.03:
         return err(f"need about {dev_buy_sol + 0.03:.3f} SOL (dev buy + rent/fees), have {bal}")
-    img = await ipfs.load_image(env.http, image)
+    try:
+        img = await ipfs.load_image(env.http, image)
+    except ipfs.ImageSourceError as e:
+        return err(str(e))
     meta = {
         "name": name,
         "symbol": symbol,

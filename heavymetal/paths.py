@@ -28,3 +28,10 @@ def wallet_path() -> Path:
 
 def history_path() -> Path:
     return home() / "prompt_history"
+
+
+def images_dir() -> Path:
+    """The only local folder `launch_token` may read images from (uploaded to public IPFS)."""
+    p = home() / "images"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
